@@ -1,0 +1,20 @@
+{
+  "name": "watchflow-youtube-discovery",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Viewer-first YouTube discovery app for intentional, explainable and finite watch sessions.",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "dev:backend": "npm run dev --workspace backend",
+    "dev:frontend": "npm run dev --workspace frontend",
+    "build": "npm run build --workspace backend && npm run build --workspace frontend",
+    "test": "npm run test --workspace backend && npm run test --workspace frontend",
+    "lint": "npm run lint --workspace backend && npm run lint --workspace frontend"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
