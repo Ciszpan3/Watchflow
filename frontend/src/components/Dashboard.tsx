@@ -22,9 +22,9 @@ export function Sidebar({ channel, open, onClose }: { channel: ChannelOverview |
       <button className={`sidebar-backdrop ${open ? "visible" : ""}`} onClick={onClose} aria-label="Close navigation" />
       <aside className={`sidebar ${open ? "open" : ""}`}>
         <div className="brand-row">
-          <a className="brand" href="#overview" aria-label="Creator IQ home">
+          <a className="brand" href="#overview" aria-label="Watchflow home">
             <span className="brand-mark"><Youtube aria-hidden="true" /></span>
-            <span>Creator IQ</span>
+            <span>Watchflow</span>
           </a>
           <button className="icon-button close-nav" onClick={onClose} aria-label="Close navigation"><X /></button>
         </div>
@@ -57,7 +57,7 @@ export function MobileBar({ onMenu }: { onMenu: () => void }) {
   return (
     <div className="mobile-bar">
       <button className="icon-button" onClick={onMenu} aria-label="Open navigation"><Menu /></button>
-      <div className="mobile-brand"><Youtube /> <strong>Creator IQ</strong></div>
+      <div className="mobile-brand"><Youtube /> <strong>Watchflow</strong></div>
       <span className="status-dot demo" title="Demo data active" />
     </div>
   );

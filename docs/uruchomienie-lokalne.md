@@ -16,16 +16,16 @@ PostgreSQL nie jest jeszcze wymagany. Zmienna `DATABASE_URL` jest przygotowana p
 ### Windows PowerShell
 
 ```powershell
-git clone https://github.com/Ciszpan3/Creator-IQ.git
-Set-Location Creator-IQ
+git clone https://github.com/Ciszpan3/Watchflow.git
+Set-Location Watchflow
 npm install
 ```
 
 ### macOS lub Linux
 
 ```bash
-git clone https://github.com/Ciszpan3/Creator-IQ.git
-cd Creator-IQ
+git clone https://github.com/Ciszpan3/Watchflow.git
+cd Watchflow
 npm install
 ```
 

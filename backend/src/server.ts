@@ -19,7 +19,7 @@ app.use(cors({
 app.use(express.json());
 
 app.get("/health", (_req, res) => {
-  res.json({ status: "ok", service: "youtube-creator-dashboard-api" });
+  res.json({ status: "ok", service: "watchflow-api" });
 });
 
 app.use("/api/auth", authRouter);
