@@ -203,7 +203,7 @@ export function OnboardingModal({ open, profile, signals, editing, onProgress, o
             <section>
               <span className="section-kicker">Step 3 · Recommendation sources</span>
               <h2 id="onboarding-title">How far should Watchflow look?</h2>
-              <p>Your choices control the recommendation logic. This demo does not import account data yet.</p>
+              <p>Your choices control the recommendation logic. Connected accounts use imported subscriptions and liked videos; demo mode keeps everything local.</p>
               <div className="source-picker">{sourceOptions.map((option) => <button key={option.value} className={draft.defaultSource === option.value ? "selected" : ""} type="button" onClick={() => setDraft((current) => ({ ...current, defaultSource: option.value }))}><span>{option.label}</span><small>{option.note}</small>{draft.defaultSource === option.value && <CheckCircle2 />}</button>)}</div>
               <div className="signal-permissions">
                 <label><span className="signal-icon"><Users /></span><span><strong>Use my subscriptions</strong><small>{signals.subscriptions.detail}</small></span><input type="checkbox" checked={draft.useSubscriptions} onChange={(event) => setDraft((current) => ({ ...current, useSubscriptions: event.target.checked }))} /></label>

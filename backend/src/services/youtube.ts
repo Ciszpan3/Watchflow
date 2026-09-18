@@ -15,6 +15,12 @@ export function createYoutubeClient(accessToken: string) {
   return google.youtube({ version: "v3", auth });
 }
 
+export function createYoutubeClientWithRefreshToken(refreshToken: string) {
+  const auth = createOAuthClient();
+  auth.setCredentials({ refresh_token: refreshToken });
+  return google.youtube({ version: "v3", auth });
+}
+
 export async function getAuthenticatedChannel(youtube: youtube_v3.Youtube): Promise<ChannelSummary | null> {
   const response = await youtube.channels.list({
     mine: true,

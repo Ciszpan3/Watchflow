@@ -1,76 +1,74 @@
 # Watchflow
 
-Watchflow to aplikacja pomagająca zwykłym użytkownikom YouTube znaleźć film dopasowany do aktualnej sytuacji, zamiast bez końca przewijać rekomendacje. Użytkownik określa czas, intencję i źródło materiałów, a aplikacja tworzy krótką, wyjaśnialną sesję z wyraźnym punktem zakończenia.
+Watchflow pomaga zwykłym użytkownikom YouTube znaleźć kilka filmów dopasowanych do dostępnego czasu, bieżącej intencji i własnego gustu. Zamiast nieskończonego feedu aplikacja buduje maksymalnie trzyczęściową, wyjaśnialną sesję z naturalnym punktem zakończenia.
 
-Projekt jest rozwijany jako pełnostackowa aplikacja portfolio prezentująca Google OAuth, YouTube Data API, kontrolowaną personalizację, projekt backendu świadomy limitów API oraz dopracowany interfejs React.
+Projekt jest pełnostackową aplikacją portfolio: łączy bezpieczne Google OAuth, YouTube Data API, PostgreSQL, kontrolę limitów API oraz deterministyczny ranking, którego wynik użytkownik może zrozumieć i korygować.
 
-## Aktualne demo
+## Co działa
 
-Interaktywne demo zawiera:
+- logowanie Google i trwała sesja w cookie `HttpOnly`;
+- szyfrowanie refresh tokenów AES-256-GCM wyłącznie na backendzie;
+- trwały profil zainteresowań i onboarding w PostgreSQL;
+- synchronizacja subskrypcji, maksymalnie 200 polubień oraz ostatnich filmów z wybranych subskrybowanych kanałów;
+- wyszukiwanie nowych twórców z 12-godzinnym cache i dziennym limitem bezpieczeństwa;
+- maksymalnie trzy prawdziwe rekomendacje z informacją, dlaczego pasują;
+- wymagane filtry języka i formatu, limit czasu oraz wybór źródła;
+- trwała kolejka, rejestrowanie otwarć i feedback wpływający na kolejne wyniki;
+- rozłączenie YouTube, wylogowanie i trwałe usunięcie konta;
+- osobny tryb demo bez logowania, który nigdy nie miesza się z wynikami live.
 
-- trzyetapowy onboarding zainteresowań, stylu oglądania i źródeł rekomendacji;
-- wersjonowany profil widza przechowywany lokalnie;
-- sześć intencji oglądania i cztery limity czasu;
-- wybór między subskrypcjami, trybem mieszanym i nowymi twórcami;
-- filtry tematu, formatu, języka, głębokości i poziomu odkrywania;
-- osobne ustawienia wykorzystania subskrypcji i polubionych filmów;
-- maksymalnie trzy rekomendacje z wyjaśnieniem oraz naturalnym końcem sesji;
-- zapisywanie i semantyczne odrzucanie rekomendacji;
-- przykładową kolejkę, ścieżkę edukacyjną i content diet;
-- responsywny ciemny interfejs dla desktopu, tabletu i telefonu.
-
-Wszystkie rekomendacje i statystyki są wyraźnie oznaczone jako dane demonstracyjne. Połączenie OAuth działa, ale aplikacja nie importuje jeszcze danych użytkownika i nie zapisuje tokenów.
-
-## Dostępne sygnały YouTube
-
-YouTube Data API pozwala w przyszłości wykorzystać między innymi:
-
-- kanały zasubskrybowane przez użytkownika;
-- filmy polubione przez użytkownika;
-- publiczne metadane filmów i kanałów;
-- dostępne playlisty użytkownika.
-
-API nie udostępnia historii oglądania ani zawartości playlisty Watch Later. Watchflow nie przedstawia tych danych jako dostępnych i opiera przyszłą personalizację także na jawnym profilu oraz aktywności wykonanej wewnątrz aplikacji.
+Historia oglądania i zawartość Watch Later nie są dostępne przez YouTube Data API, dlatego Watchflow ich nie udaje. Personalizacja wykorzystuje subskrypcje, polubienia, jawny profil oraz aktywność wykonaną wewnątrz aplikacji.
 
 ## Architektura
 
 ```text
-Frontend React
-  -> adapter kontraktów widza
-    -> Node/Express API
-      -> Google OAuth
-      -> YouTube Data API
-      -> PostgreSQL i cache
-      -> deterministyczny ranking
-      -> opcjonalne wyjaśnienia AI
+React + TypeScript
+  -> API Express z cookie sesyjnym
+    -> Google OAuth / YouTube Data API
+    -> Prisma 7 + PostgreSQL
+    -> cache synchronizacji i wyszukiwania
+    -> deterministyczny ranking oraz feedback
 ```
-
-Obecne demo korzysta z lokalnego adaptera o kształcie przyszłych endpointów. Dzięki temu UI można później przełączyć na prawdziwy backend bez przebudowy modelu profilu i sesji.
 
 ## Stack
 
-- React 19 i TypeScript
-- Vite
-- Node.js i Express
-- Google OAuth 2.0
-- YouTube Data API v3
-- PostgreSQL planowany dla trwałego przechowywania
-- Vitest i Testing Library
+- React 19, TypeScript i Vite;
+- Node.js, Express i TypeScript;
+- Prisma ORM 7 z adapterem `@prisma/adapter-pg`;
+- PostgreSQL;
+- Google OAuth 2.0 i YouTube Data API v3;
+- Vitest i Testing Library.
 
-## Uruchomienie lokalne
+## Szybki start
+
+Po utworzeniu bazy PostgreSQL `watchflow`:
 
 ```powershell
 npm install
 Copy-Item .env.example backend/.env
 Copy-Item frontend/.env.example frontend/.env
+# Uzupełnij DATABASE_URL, dane Google i TOKEN_ENCRYPTION_KEY.
+npm run db:generate
+npm run db:migrate
 npm run dev:backend
+```
+
+W drugim terminalu:
+
+```powershell
 npm run dev:frontend
 ```
 
-Backend i frontend uruchamia się w osobnych terminalach. Frontend zwykle otwiera się pod `http://localhost:5173`; jeżeli Vite wybierze inny port, trzeba zaktualizować `CLIENT_ORIGIN` w `backend/.env` i ponownie uruchomić backend.
+Pełna instrukcja dla Windows, macOS i Linux, konfiguracja PostgreSQL, Google Cloud, użytkownicy testowi i rozwiązywanie problemów znajdują się w [docs/uruchomienie-lokalne.md](docs/uruchomienie-lokalne.md).
 
-Pełna instrukcja dla Windows, macOS i Linux, konfiguracja Google Cloud oraz opis dostępu dla użytkowników testowych znajdują się w pliku [docs/uruchomienie-lokalne.md](docs/uruchomienie-lokalne.md). Nigdy nie zapisuj prawdziwych sekretów ani tokenów w repozytorium.
+## Weryfikacja
 
-## Status projektu
+```powershell
+npm run db:validate
+npm run db:status
+npm run lint
+npm test
+npm run build
+```
 
-Dashboard, onboarding, profil widza i ranking demonstracyjny są interaktywne. Kolejny etap obejmie konta użytkowników, szyfrowane przechowywanie refresh tokenów, import subskrypcji i polubień oraz trwałość w PostgreSQL.
+Sekrety muszą pozostać w ignorowanym pliku `backend/.env`. Frontend przechowuje wyłącznie publiczny adres API.

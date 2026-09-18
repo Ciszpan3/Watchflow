@@ -26,8 +26,8 @@ Analityka twórców może istnieć jako osobny, opcjonalny moduł, ale nie może
 
 - Frontend: React i TypeScript.
 - Backend: Node.js, Express i TypeScript.
-- Planowana trwałość danych: PostgreSQL.
-- Google OAuth należy do backendu i powinien używać najmniejszego wystarczającego zakresu uprawnień.
+- Trwałość danych: PostgreSQL przez Prisma ORM 7 i adapter `@prisma/adapter-pg`.
+- Google OAuth należy do backendu, używa zakresów tożsamości oraz `youtube.readonly`, a refresh tokeny muszą być szyfrowane.
 - Dane demonstracyjne i lokalne zasoby wizualne muszą działać bez danych dostępowych.
 - Oddzielaj frontend, ranking rekomendacji, integrację YouTube, trwałość danych i opcjonalną analitykę twórców.
 

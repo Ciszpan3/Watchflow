@@ -1,96 +1,302 @@
 generator client {
-  provider = "prisma-client-js"
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
 }
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
+}
+
+enum ProfileStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+  SKIPPED
+}
+
+enum VideoSource {
+  SUBSCRIBED
+  NEW
+}
+
+enum SyncStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+enum FeedbackReason {
+  ALREADY_WATCHED
+  NOT_INTERESTED
+  TOO_LONG
+  TOO_OFTEN
+}
+
+enum ActivityType {
+  OPENED
+  SAVED
+  UNSAVED
 }
 
 model User {
-  id             String          @id @default(cuid())
-  email          String?         @unique
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
-  googleAccounts GoogleAccount[]
+  id                     String                   @id @default(cuid())
+  googleSubject          String                   @unique
+  email                  String                   @unique
+  displayName            String
+  avatarUrl              String?
+  createdAt              DateTime                 @default(now())
+  updatedAt              DateTime                 @updatedAt
+  googleAccount          GoogleAccount?
+  profile                ViewerProfile?
+  authSessions           AuthSession[]
+  subscriptions          Subscription[]
+  likedVideos            LikedVideo[]
+  videoCandidates        UserVideoCandidate[]
+  syncJobs               SyncJob[]
+  recommendationSessions RecommendationSession[]
+  savedVideos            SavedVideo[]
+  feedback               RecommendationFeedback[]
+  activities             ViewingActivity[]
 }
 
 model GoogleAccount {
   id                    String   @id @default(cuid())
-  userId                String
-  googleAccountId       String?
+  userId                String   @unique
   encryptedRefreshToken String?
   scopes                String[]
-  createdAt             DateTime @default(now())
+  needsReconnect        Boolean  @default(false)
+  syncCursor            Int      @default(0)
+  lastSyncedAt          DateTime?
+  connectedAt           DateTime @default(now())
   updatedAt             DateTime @updatedAt
-  user                  User     @relation(fields: [userId], references: [id])
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model AuthSession {
+  id         String   @id @default(cuid())
+  userId     String
+  tokenHash  String   @unique
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model ViewerProfile {
+  id               String        @id @default(cuid())
+  userId           String        @unique
+  version          Int           @default(1)
+  status           ProfileStatus @default(NOT_STARTED)
+  interests        String[]
+  customTopics     String[]
+  excludedTopics   String[]
+  languages        String[]
+  formats          String[]
+  defaultSource    String        @default("mixed")
+  novelty          Int           @default(58)
+  depth            Int           @default(62)
+  pace             Int           @default(48)
+  audioFriendly    Boolean       @default(false)
+  antiClickbait    Boolean       @default(true)
+  useSubscriptions Boolean       @default(true)
+  useLikedVideos   Boolean       @default(true)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model Channel {
-  id               String    @id
+  id               String         @id
   title            String
   description      String?
   thumbnailUrl     String?
-  subscriberCount  Int       @default(0)
-  viewCount        Int       @default(0)
-  videoCount       Int       @default(0)
   uploadPlaylistId String?
-  lastSyncedAt     DateTime?
+  subscriberCount  BigInt?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
   videos           Video[]
-  insights         Insight[]
+  subscriptions    Subscription[]
 }
 
 model Video {
-  id                 String    @id
-  channelId          String
-  title              String
-  description        String?
-  thumbnailUrl       String?
-  durationSeconds    Int       @default(0)
-  publishedAt        DateTime?
-  views              Int       @default(0)
-  likes              Int       @default(0)
-  commentsCount      Int       @default(0)
-  engagementRate     Float     @default(0)
-  viewsPerSubscriber Float     @default(0)
-  opportunityScore   Int       @default(0)
-  rawPayload         Json?
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
-  channel            Channel   @relation(fields: [channelId], references: [id])
-  comments           Comment[]
+  id                   String                   @id
+  channelId            String
+  title                String
+  description          String?
+  thumbnailUrl         String?
+  durationSeconds      Int
+  publishedAt          DateTime?
+  viewCount            BigInt?
+  likeCount            BigInt?
+  tags                 String[]
+  categoryId           String?
+  language             String?
+  format               String
+  topics               String[]
+  intents              String[]
+  audioFriendly        Boolean                  @default(false)
+  clickbaitScore       Int                      @default(0)
+  liveBroadcastContent String?
+  fetchedAt            DateTime                 @default(now())
+  channel              Channel                  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  likedBy              LikedVideo[]
+  candidates           UserVideoCandidate[]
+  recommendationItems  RecommendationItem[]
+  savedBy              SavedVideo[]
+  feedback             RecommendationFeedback[]
+  activities           ViewingActivity[]
+
+  @@index([channelId, publishedAt])
 }
 
-model Comment {
-  id                String    @id
-  videoId           String
-  authorDisplayName String?
-  text              String
-  likeCount         Int       @default(0)
-  publishedAt       DateTime?
-  rawPayload        Json?
-  video             Video     @relation(fields: [videoId], references: [id])
+model Subscription {
+  id            String   @id @default(cuid())
+  userId        String
+  channelId     String
+  importedAt    DateTime @default(now())
+  lastCheckedAt DateTime @default(now())
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel       Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, channelId])
+  @@index([userId])
+}
+
+model LikedVideo {
+  id         String   @id @default(cuid())
+  userId     String
+  videoId    String
+  importedAt DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  video      Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, videoId])
+  @@index([userId])
+}
+
+model UserVideoCandidate {
+  id           String      @id @default(cuid())
+  userId       String
+  videoId      String
+  source       VideoSource
+  discoveredAt DateTime    @default(now())
+  expiresAt    DateTime
+  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  video        Video       @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, videoId, source])
+  @@index([userId, source, expiresAt])
 }
 
 model SyncJob {
-  id            String    @id @default(cuid())
-  channelId     String?
-  status        String
-  quotaEstimate Int       @default(0)
-  error         String?
-  startedAt     DateTime  @default(now())
-  finishedAt    DateTime?
+  id                 String     @id @default(cuid())
+  userId             String
+  activeKey          String?    @unique
+  status             SyncStatus @default(QUEUED)
+  phase              String     @default("queued")
+  subscriptionsCount Int        @default(0)
+  likedVideosCount   Int        @default(0)
+  candidatesCount    Int        @default(0)
+  errorCode          String?
+  errorMessage       String?
+  startedAt          DateTime   @default(now())
+  finishedAt         DateTime?
+  user               User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, startedAt])
 }
 
-model Insight {
-  id             String   @id @default(cuid())
-  channelId      String
-  type           String
-  title          String
-  summary        String
-  recommendation String
-  confidence     Float
-  sourceMetadata Json?
-  createdAt      DateTime @default(now())
-  channel        Channel  @relation(fields: [channelId], references: [id])
+model RecommendationSession {
+  id           String               @id @default(cuid())
+  userId       String
+  request      Json
+  totalMinutes Int
+  createdAt    DateTime             @default(now())
+  user         User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items        RecommendationItem[]
+
+  @@index([userId, createdAt])
+}
+
+model RecommendationItem {
+  id        String                @id @default(cuid())
+  sessionId String
+  videoId   String
+  position  Int
+  score     Int
+  source    VideoSource
+  reason    String
+  signals   String[]
+  session   RecommendationSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  video     Video                 @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, videoId])
+  @@index([sessionId, position])
+}
+
+model SavedVideo {
+  id        String   @id @default(cuid())
+  userId    String
+  videoId   String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  video     Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, videoId])
+  @@index([userId, createdAt])
+}
+
+model RecommendationFeedback {
+  id        String         @id @default(cuid())
+  userId    String
+  videoId   String
+  reason    FeedbackReason
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  video     Video          @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, videoId])
+  @@index([userId, reason])
+}
+
+model ViewingActivity {
+  id        String       @id @default(cuid())
+  userId    String
+  videoId   String
+  type      ActivityType
+  createdAt DateTime     @default(now())
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  video     Video        @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([userId, videoId])
+}
+
+model SearchCache {
+  id        String   @id @default(cuid())
+  cacheKey  String   @unique
+  query     String
+  language  String
+  format    String?
+  videoIds  String[]
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([expiresAt])
+}
+
+model ApiQuotaUsage {
+  id        String   @id @default(cuid())
+  dayKey    String
+  method    String
+  calls     Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@unique([dayKey, method])
 }

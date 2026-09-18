@@ -1,92 +1,64 @@
-# Watchflow - plan projektu
+# Watchflow - plan i stan projektu
 
 ## Cel produktu
 
-Watchflow pomaga zwykłym użytkownikom YouTube wybrać film zgodny z ich aktualną intencją, dostępnym czasem i osobistym gustem. Wynikiem jest mała, uporządkowana sesja z jasnym wyjaśnieniem rekomendacji i świadomym punktem zakończenia.
+Watchflow pomaga widzowi świadomie wybrać film pasujący do czasu, intencji i zainteresowań. Wynikiem jest skończona sesja maksymalnie trzech materiałów, a nie kolejny nieskończony feed. Analityka twórców pozostaje opcjonalnym dodatkiem.
 
-Analityka twórcy pozostaje opcjonalnym przyszłym dodatkiem i nie stanowi głównego przepływu aplikacji.
+## Zrealizowany przepływ live
 
-## Główne historie użytkownika
+- Google OAuth korzysta z `openid`, `email`, `profile` i `youtube.readonly`.
+- Użytkownik jest identyfikowany przez stabilne Google `sub`.
+- Refresh token jest szyfrowany AES-256-GCM, a przeglądarka otrzymuje wyłącznie losową sesję w cookie `HttpOnly`.
+- Profil widza, synchronizacje, filmy, rekomendacje, kolejka, feedback i otwarcia są zapisywane w PostgreSQL.
+- Po logowaniu aplikacja importuje stary lokalny profil tylko raz, jeżeli profil serwerowy nie został jeszcze zmieniony.
+- Synchronizacja działa automatycznie po przekroczeniu sześciu godzin oraz ręcznie z 15-minutowym cooldownem.
+- Demo jest osobnym, jawnym trybem i nie jest używane jako ukryte uzupełnienie danych live.
 
-- Jako widz chcę opisać swoją aktualną potrzebę bez wymyślania dokładnej frazy wyszukiwania.
-- Chcę określić czas, temat, język i format materiału.
-- Chcę zdecydować, czy rekomendacje mają pochodzić z subskrypcji, od nowych twórców, czy z obu źródeł.
-- Chcę rozumieć, dlaczego każdy film został wybrany.
-- Chcę kontrolować wykorzystanie subskrypcji i polubionych filmów.
-- Chcę poprawiać profil gustu i przekazywać konkretny powód odrzucenia rekomendacji.
-- Chcę zakończyć sesję po kilku dobrych materiałach zamiast wejść w nieskończony feed.
+## Sygnały i synchronizacja
 
-## Zakres aktualnego demo
+Synchronizacja pobiera wszystkie dostępne subskrypcje, maksymalnie 200 ostatnich polubionych filmów oraz po trzy ostatnie materiały z maksymalnie 40 kanałów. Najpierw wybiera kanały występujące w polubieniach, a pozostałe rotuje między synchronizacjami.
 
-- onboarding uruchamiany po pierwszym poprawnym OAuth;
-- trzy kroki: zainteresowania, styl oglądania i źródła;
-- zapis stanu `not_started`, `in_progress`, `completed` lub `skipped` w wersjonowanym `localStorage`;
-- edycja profilu z dashboardu;
-- sześć intencji oraz wybór źródła rekomendacji;
-- rozwijane filtry tematu, języka, formatu, głębokości i odkrywania;
-- deterministyczny ranking i kontrolowana proporcja źródeł;
-- stany pustych wyników bez automatycznego obchodzenia wyboru użytkownika;
-- lokalne dane i grafiki demonstracyjne.
+Polubienia są sygnałem gustu, a nie osobnym źródłem kandydatów. Historia oglądania i Watch Later pozostają niedostępne przez YouTube Data API.
 
-Demo nie może sugerować, że przykładowe rekomendacje lub statystyki zostały pobrane z konta użytkownika.
+Nowi twórcy są wyszukiwani maksymalnie dla dwóch języków na sesję. Wyniki `search.list` są przechowywane przez 12 godzin. Atomowy licznik zatrzymuje aplikację przy 80 wywołaniach dziennie, pozostawiając margines bezpieczeństwa.
 
-## Kontrakty przyszłego API
+## Ranking
 
-- `GET /api/viewer/profile` - profil, status onboardingu i ustawienia domyślne.
-- `PUT /api/viewer/profile` - zapis jawnych preferencji użytkownika.
-- `GET /api/viewer/signals` - stan połączenia i dostępność sygnałów YouTube.
-- `POST /api/recommendations/session` - utworzenie skończonej sesji dla przekazanego kontekstu.
-- `POST /api/recommendations/:videoId/feedback` - zapis reakcji i przyczyny odrzucenia.
-- `GET /api/queue` - kolejka materiałów zapisana wewnątrz Watchflow.
-- `GET /api/learning-paths` - uporządkowane ścieżki edukacyjne.
-
-W obecnym etapie funkcje frontendowego adaptera odpowiadają pierwszym czterem kontraktom, ale korzystają z danych lokalnych. Backend nie tworzy nietrwałej atrapy bazy w pamięci.
-
-## Model preferencji
-
-Profil widza zawiera:
-
-- status i wersję onboardingu;
-- kategorie zainteresowań, własne tematy i wykluczenia;
-- języki oraz formaty;
-- domyślne źródło rekomendacji;
-- głębokość, tempo i poziom odkrywania;
-- ustawienia audio-friendly i anti-clickbait;
-- oddzielne zgody na subskrypcje i polubione filmy.
-
-Żądanie sesji może tymczasowo nadpisać ustawienia profilu, ale ich nie zmienia.
-
-## Strategia rekomendacji
-
-Ranking demonstracyjny jest deterministyczny:
+Ranking jest deterministyczny:
 
 - intencja: 30%;
 - temat: 25%;
-- profil i zgodność z polubieniami: 20%;
+- profil, polubienia i aktywność: 20%;
 - dopasowanie czasu: 15%;
 - głębokość i odkrywanie: 10%.
 
-Język i format są filtrami wymaganymi. Algorytm nakłada karę za powtarzający się kanał lub bardzo podobny temat. Tryb mieszany preferuje układ subskrypcja, nowy twórca, subskrypcja. Tryby wyłączne nigdy samodzielnie nie rozszerzają źródła.
+Język i format są filtrami wymaganymi. Wykluczone tematy oraz obejrzane filmy są usuwane. Powtarzające się kanały i tematy otrzymują karę różnorodności. W trybie mieszanym preferowany jest układ subskrypcja, nowy twórca, subskrypcja; tryby wyłączne nie rozszerzają samodzielnie źródła.
 
-## Granice YouTube API
+Feedback zmienia kolejne wyniki: obejrzany materiał jest wykluczany, brak zainteresowania obniża tematy, „zbyt długi” czasowo obniża podobne długości, „zbyt częsty” obniża kanał, a zapisanie lub otwarcie wzmacnia temat i kanał.
 
-Zakres `youtube.readonly` może obsłużyć odczyt subskrypcji i polubionych filmów. YouTube Data API nie udostępnia historii oglądania ani elementów Watch Later. Watchflow będzie łączyć dostępne dane z jawnymi preferencjami oraz aktywnością wykonaną wewnątrz aplikacji.
+## Endpointy
 
-Tokeny i klucze pozostają wyłącznie na backendzie. Prawdziwa integracja wymaga kont użytkowników, szyfrowania refresh tokenów, trwałych sesji, mechanizmu odświeżania oraz kontroli limitów API.
+- `GET /api/auth/session`, `POST /api/auth/logout`, `DELETE /api/auth/youtube`;
+- `DELETE /api/viewer/account`;
+- `GET /api/viewer/profile`, `PUT /api/viewer/profile`, `GET /api/viewer/signals`;
+- `POST /api/viewer/sync`;
+- `POST /api/recommendations/session`;
+- `POST /api/recommendations/:videoId/feedback` i `POST /api/recommendations/:videoId/opened`;
+- `GET /api/queue`, `POST /api/queue`, `DELETE /api/queue/:videoId`.
 
-## Następny etap techniczny
+## Bezpieczeństwo i limity
 
-1. Dodać PostgreSQL i migracje dla użytkowników, kont Google, profili, sygnałów i sesji rekomendacji.
-2. Po OAuth zapisywać zaszyfrowany refresh token i zwracać frontendowi wyłącznie stan sesji.
-3. Importować subskrypcje oraz polubione filmy z cache i cooldownem.
-4. Zastąpić adapter demo prawdziwymi endpointami bez zmiany typów UI.
-5. Dodać zapis feedbacku i aktywności wykonanej w Watchflow.
+- callback OAuth weryfikuje jednorazowy parametr `state`;
+- nowa zgoda bez refresh tokena nie usuwa wcześniej zapisanego tokena;
+- `invalid_grant` oznacza konto jako wymagające ponownego połączenia bez usuwania profilu;
+- CORS z credentials dopuszcza skonfigurowany frontend;
+- jeden użytkownik może mieć tylko jedno aktywne zadanie synchronizacji, co wymusza również unikalny klucz w bazie;
+- klucze, tokeny i sekrety nigdy nie trafiają do frontendu ani repozytorium.
 
-## Testowanie
+## Dalszy rozwój
 
-- testy rankingu, źródeł, limitów czasu, filtrów i różnorodności;
-- testy zapisu, odczytu i uszkodzonego stanu profilu lokalnego;
-- testy onboardingu: walidacja, postęp, pominięcie, ukończenie i edycja;
-- testy pustych wyników oraz jawnych ograniczeń YouTube API;
-- testy OAuth i redakcji tokenów na backendzie;
-- kontrola wizualna przy szerokościach około 1440, 1024 i 390 px.
+1. Kolejka zewnętrzna dla synchronizacji i ponowień zamiast procesu aplikacji.
+2. Rozbudowane testy integracyjne YouTube z nagranymi odpowiedziami API.
+3. Live content diet po zebraniu wystarczającej aktywności.
+4. Ścieżki edukacyjne tworzone wyłącznie z prawdziwych rekomendacji.
+5. Publikacja aplikacji i weryfikacja OAuth przez Google.

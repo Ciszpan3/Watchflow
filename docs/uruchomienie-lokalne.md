@@ -1,17 +1,15 @@
 # Uruchomienie Watchflow na własnym komputerze
 
-Ten przewodnik opisuje uruchomienie obecnej wersji demonstracyjnej Watchflow oraz opcjonalne skonfigurowanie połączenia z kontem YouTube przez Google OAuth. Demo rekomendacji działa bez danych dostępowych Google.
+Ten przewodnik prowadzi przez lokalne uruchomienie trybu live z PostgreSQL i Google OAuth. Tryb demo działa bez konta Google, ale backend nadal wymaga bazy do obsługi sesji i endpointów live.
 
 ## Wymagania
 
-- Node.js 20 lub nowszy;
-- npm, instalowany razem z Node.js;
-- Git;
-- konto Google Cloud tylko wtedy, gdy ma działać przycisk połączenia z YouTube.
+- Node.js 20.19 lub nowszy;
+- npm i Git;
+- PostgreSQL, lokalnie używana jest wersja 18;
+- projekt Google Cloud z YouTube Data API v3 dla trybu live.
 
-PostgreSQL nie jest jeszcze wymagany. Zmienna `DATABASE_URL` jest przygotowana pod kolejny etap projektu, ale obecne demo nie zapisuje danych w bazie.
-
-## Pobranie projektu
+## Pobranie i instalacja
 
 ### Windows PowerShell
 
@@ -19,6 +17,8 @@ PostgreSQL nie jest jeszcze wymagany. Zmienna `DATABASE_URL` jest przygotowana p
 git clone https://github.com/Ciszpan3/Watchflow.git
 Set-Location Watchflow
 npm install
+Copy-Item .env.example backend/.env
+Copy-Item frontend/.env.example frontend/.env
 ```
 
 ### macOS lub Linux
@@ -27,151 +27,153 @@ npm install
 git clone https://github.com/Ciszpan3/Watchflow.git
 cd Watchflow
 npm install
+cp .env.example backend/.env
+cp frontend/.env.example frontend/.env
 ```
 
-## Konfiguracja środowiska
+Sekrety trafiają wyłącznie do `backend/.env`. Plik `frontend/.env` zawiera tylko publiczny `VITE_API_BASE_URL`.
 
-Backend i frontend mają oddzielne pliki konfiguracyjne. Sekrety Google mogą znajdować się wyłącznie w `backend/.env`. Frontend otrzymuje tylko publiczny adres API.
+## PostgreSQL i Prisma
+
+Utwórz pustą bazę `watchflow`. Przykład, gdy polecenia PostgreSQL są dostępne w `PATH`:
+
+```powershell
+createdb -U postgres watchflow
+```
+
+Można też utworzyć bazę w pgAdmin. Następnie dopasuj hasło i port w `backend/.env`:
+
+```env
+DATABASE_URL=postgresql://postgres:twoje-haslo@localhost:5432/watchflow
+```
+
+Wygeneruj 32-bajtowy klucz szyfrowania refresh tokenów.
 
 ### Windows PowerShell
 
 ```powershell
-Copy-Item .env.example backend/.env
-Copy-Item frontend/.env.example frontend/.env
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 ```
 
 ### macOS lub Linux
 
 ```bash
-cp .env.example backend/.env
-cp frontend/.env.example frontend/.env
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 ```
 
-Najważniejsze zmienne backendu:
+Wynik zapisz tylko lokalnie:
 
-| Zmienna | Znaczenie |
-| --- | --- |
-| `PORT` | Port API Express, domyślnie `4000`. |
-| `CLIENT_ORIGIN` | Dokładny adres frontendu, na który wraca użytkownik po OAuth. |
-| `GOOGLE_CLIENT_ID` | Identyfikator klienta OAuth z Google Cloud. |
-| `GOOGLE_CLIENT_SECRET` | Sekret klienta OAuth. Nigdy nie trafia do frontendu ani repozytorium. |
-| `GOOGLE_REDIRECT_URI` | Callback backendu zarejestrowany w Google Cloud. |
-| `YOUTUBE_API_KEY` | Klucz do przyszłych zapytań o publiczne dane YouTube. Nie jest wymagany przez demo. |
-| `DATABASE_URL` | Połączenie PostgreSQL przygotowane na przyszłość. |
-| `OPENAI_API_KEY` | Opcjonalna konfiguracja przyszłych funkcji AI. |
+```env
+TOKEN_ENCRYPTION_KEY=wygenerowana-wartosc-base64
+```
 
-Frontend używa wyłącznie `VITE_API_BASE_URL`. Dla lokalnego backendu wartość pozostaje równa `http://localhost:4000`.
-
-Pliki `.env` są ignorowane przez Git. Nie należy przesyłać ich przez GitHub, wklejać do zgłoszeń ani publikować na zrzutach ekranu.
-
-## Uruchomienie aplikacji
-
-Otwórz dwa terminale w głównym folderze projektu.
-
-W pierwszym uruchom backend:
+Przygotuj klienta i tabele:
 
 ```powershell
-npm run dev:backend
+npm run db:generate
+npm run db:migrate
+npm run db:status
 ```
 
-W drugim uruchom frontend:
+Nie zmieniaj `TOKEN_ENCRYPTION_KEY` po zapisaniu kont. Stare refresh tokeny nie dadzą się odszyfrować nowym kluczem.
 
-```powershell
-npm run dev:frontend
-```
+## Konfiguracja Google Cloud
 
-API powinno być dostępne pod `http://localhost:4000`, a aplikacja zwykle pod `http://localhost:5173`. Stan backendu można sprawdzić, otwierając `http://localhost:4000/health`.
-
-Jeżeli port `5173` jest zajęty, Vite wybierze kolejny, na przykład `5174` lub `5175`. Wtedy ustaw ten sam adres w `CLIENT_ORIGIN` w `backend/.env` i ponownie uruchom backend. Ta zmienna decyduje, dokąd callback OAuth przekieruje użytkownika.
-
-## Konfiguracja Google Cloud i YouTube OAuth
-
-Poniższe kroki są potrzebne tylko do przetestowania połączenia konta Google.
-
-1. Otwórz [Google Cloud Console](https://console.cloud.google.com/) i utwórz projekt albo wybierz istniejący.
-2. W sekcji API Library włącz **YouTube Data API v3**.
-3. Otwórz **Google Auth Platform** i skonfiguruj ekran zgody OAuth.
-4. Ustaw typ odbiorców **External** i pozostaw status publikacji **Testing**.
-5. W sekcji **Audience** dodaj adres testowy, na przykład `twoj-email@example.com`.
-6. W sekcji **Data Access** dodaj zakres `https://www.googleapis.com/auth/youtube.readonly`.
-7. W sekcji **Clients** utwórz klienta typu **Web application**.
-8. W **Authorized redirect URIs** dodaj dokładnie:
+1. Otwórz [Google Cloud Console](https://console.cloud.google.com/) i utwórz lub wybierz projekt.
+2. Włącz **YouTube Data API v3**.
+3. W **Google Auth Platform** skonfiguruj aplikację **External** w trybie **Testing**.
+4. W sekcji **Audience** dodaj konto testowe, np. `twoj-email@example.com`.
+5. Dodaj zakres `https://www.googleapis.com/auth/youtube.readonly`. Zakresy `openid`, `email` i `profile` aplikacja dołącza do żądania logowania.
+6. Utwórz klienta OAuth typu **Web application**.
+7. W **Authorized redirect URIs** dodaj dokładnie:
 
 ```text
 http://localhost:4000/api/auth/google/callback
 ```
 
-9. Skopiuj Client ID i Client Secret do `backend/.env`:
+8. Uzupełnij `backend/.env`:
 
 ```env
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
 GOOGLE_REDIRECT_URI=http://localhost:4000/api/auth/google/callback
+CLIENT_ORIGIN=http://localhost:5173
 ```
 
-Adres callbacku w Google Cloud i wartość `GOOGLE_REDIRECT_URI` muszą być identyczne, łącznie z protokołem, portem i ścieżką.
+Tryb Testing przepuszcza tylko konta dodane jako test users. Można dopisać znajomego do tej listy albo poprosić go o utworzenie własnego projektu Google Cloud. Nie należy publikować ani przesyłać sekretu klienta przez GitHub.
 
-## Dlaczego obecnie działa tylko dodany e-mail
+Google pozwala na maksymalnie 100 użytkowników testowych. W trybie Testing zgoda i refresh token zwykle wygasają po 7 dniach; wtedy Watchflow zachowa profil i poprosi o ponowne połączenie. Szczegóły: [zarządzanie odbiorcami OAuth](https://support.google.com/cloud/answer/15549945?hl=en).
 
-Dla aplikacji typu External ze statusem Testing Google zezwala na autoryzację jedynie kontom wpisanym na listę test users. Jeżeli do projektu dodano tylko jeden adres, tylko jego właściciel przejdzie całą ścieżkę OAuth. Pozostałe osoby zwykle zobaczą błąd `403: access_denied`.
+Publiczne wdrożenie zakresu YouTube może wymagać weryfikacji Google: [zgodność OAuth](https://developers.google.com/identity/protocols/oauth2/production-readiness/policy-compliance).
 
-Tryb Testing pozwala dodać maksymalnie 100 użytkowników testowych. Autoryzacja użytkownika, a także wydany refresh token przy dostępie offline, wygasają po 7 dniach. Są to ograniczenia Google dla aplikacji w fazie testowej, a nie błąd Watchflow. Szczegóły znajdują się w [dokumentacji zarządzania odbiorcami OAuth](https://support.google.com/cloud/answer/15549945?hl=en).
+## Uruchomienie
 
-### Szybkie udostępnienie wersji testowej
+W pierwszym terminalu:
 
-Właściciel projektu Google Cloud może dodać adres znajomego do listy test users. Jeżeli znajomy ma uruchomić backend na swoim komputerze, potrzebuje również konfiguracji klienta OAuth. Nie należy przekazywać jej przez repozytorium; dane powinny trafić osobnym, bezpiecznym kanałem i zostać zapisane wyłącznie w jego lokalnym `backend/.env`.
+```powershell
+npm run dev:backend
+```
 
-### Niezależna konfiguracja
+W drugim:
 
-Bezpieczniejszym rozwiązaniem dla osoby rozwijającej własną kopię projektu jest utworzenie osobnego projektu Google Cloud, klienta OAuth i lokalnego `backend/.env`. Dzięki temu każda osoba zarządza własnymi danymi dostępowymi, listą test users i limitami API.
+```powershell
+npm run dev:frontend
+```
 
-## Co robi obecna integracja OAuth
+API działa domyślnie pod `http://localhost:4000`, a Vite pod `http://localhost:5173`. Zdrowie API sprawdzisz pod `http://localhost:4000/health`.
 
-- prosi wyłącznie o zakres odczytu `youtube.readonly`;
-- żąda dostępu offline i ponownego pokazania ekranu zgody;
-- wymienia kod autoryzacyjny na tokeny po stronie backendu;
-- nie zapisuje access tokena ani refresh tokena w bazie lub pliku;
-- przekierowuje frontend z informacją `refreshToken=present` albo `refreshToken=missing`, ale nie umieszcza samego tokena w adresie;
-- nie importuje jeszcze subskrypcji, polubionych filmów ani danych kanału użytkownika.
+Jeżeli Vite wybierze np. `5175`, ustaw `CLIENT_ORIGIN=http://localhost:5175` i uruchom backend ponownie. `VITE_API_BASE_URL` nadal powinien wskazywać port backendu `4000`.
 
-Publiczne udostępnienie aplikacji korzystającej z wrażliwego zakresu OAuth będzie wymagało przejścia na środowisko produkcyjne i może wymagać weryfikacji przez Google. Opis przygotowania aplikacji znajduje się w [dokumentacji zgodności OAuth](https://developers.google.com/identity/protocols/oauth2/production-readiness/policy-compliance).
+## Co dzieje się po logowaniu
+
+- callback sprawdza losowy parametr `state` i zweryfikowany Google ID token;
+- konto jest identyfikowane przez Google `sub`, a nie zmienny adres e-mail;
+- refresh token jest szyfrowany AES-256-GCM w PostgreSQL i nigdy nie wraca w adresie URL;
+- przeglądarka dostaje tylko losowe cookie sesyjne `HttpOnly`, `SameSite=Lax`;
+- frontend uruchamia synchronizację, gdy dane są starsze niż sześć godzin;
+- ręczna synchronizacja ma 15-minutowy cooldown;
+- wylogowanie usuwa bieżącą sesję, odłączenie usuwa import i token, a usunięcie konta kasuje wszystkie dane użytkownika.
 
 ## Najczęstsze problemy
 
 ### `redirect_uri_mismatch`
 
-Sprawdź, czy `GOOGLE_REDIRECT_URI` i Authorized redirect URI w Google Cloud są identyczne. Po zmianie `backend/.env` uruchom backend ponownie.
+Adres w Google Cloud i `GOOGLE_REDIRECT_URI` muszą być identyczne, łącznie z protokołem, portem i ścieżką.
 
-### `403: access_denied` lub informacja o braku dostępu
+### `403: access_denied`
 
-Upewnij się, że aplikacja jest w trybie Testing, a używany adres Google znajduje się w sekcji Audience na liście test users. Zmiany w Google Cloud mogą potrzebować kilku minut.
+Sprawdź, czy konto znajduje się na liście test users i czy aplikacja pozostaje w trybie Testing.
 
-### `Google OAuth is not configured`
+### `oauth_not_configured`
 
-Backend nie odnalazł `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` albo `GOOGLE_REDIRECT_URI`. Sprawdź, czy plik nazywa się dokładnie `backend/.env`, a następnie uruchom backend ponownie.
+Uzupełnij `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` i `GOOGLE_REDIRECT_URI` w `backend/.env`, a następnie zrestartuj backend.
 
-### Powrót OAuth na niewłaściwy port frontendu
+### `reconnect_required` lub `invalid_grant`
 
-Zmień `CLIENT_ORIGIN` w `backend/.env` na adres pokazany przez Vite, na przykład `http://localhost:5175`, i zrestartuj backend. Nie zmieniaj przez to callbacku `GOOGLE_REDIRECT_URI`, jeżeli backend nadal działa na porcie `4000`.
+Zgoda albo refresh token wygasły. Kliknij **Reconnect YouTube**. Profil, kolejka i feedback pozostaną w bazie.
 
-### Frontend nie łączy się z API
+### Błąd połączenia z PostgreSQL
 
-Sprawdź, czy backend odpowiada pod `/health` oraz czy `VITE_API_BASE_URL` w `frontend/.env` wskazuje właściwy protokół, host i port. Po zmianie konfiguracji uruchom frontend ponownie.
+Sprawdź usługę PostgreSQL, nazwę bazy, hasło i port w `DATABASE_URL`. Następnie uruchom `npm run db:status`.
 
-### Brak refresh tokena
+### CORS lub powrót na niewłaściwy frontend
 
-Google nie zawsze zwraca nowy refresh token dla wcześniej zaakceptowanej zgody. Obecna aplikacja ustawia `access_type=offline` i `prompt=consent`, ale nadal jedynie raportuje obecność tokena i go nie zapisuje.
+`CLIENT_ORIGIN` musi dokładnie odpowiadać adresowi Vite. Po zmianie zrestartuj backend.
 
-## Kontrola przed udostępnieniem
+### Zajęty port
 
-Przed commitem lub wysłaniem projektu sprawdź:
+Zmień `PORT` backendu albo pozwól Vite wybrać kolejny port. Po zmianie backendu popraw również `VITE_API_BASE_URL` i callback OAuth w Google Cloud.
+
+## Kontrola przed commitem
 
 ```powershell
-git status --short --ignored
 git check-ignore -v backend/.env frontend/.env
+npm run db:validate
+npm run db:status
 npm run lint
 npm test
 npm run build
+git diff --check
 ```
 
-W indeksie Git nie mogą znajdować się żadne pliki `.env`, tokeny, klucze API ani prywatne adresy używane wyłącznie do konfiguracji Google Cloud.
+W repozytorium nie mogą znaleźć się pliki `.env`, tokeny, klucze API, sekrety klienta ani prywatne adresy e-mail.

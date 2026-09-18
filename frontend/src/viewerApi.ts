@@ -1,13 +1,16 @@
 import { createDemoSession } from "./viewerData";
+import { apiBaseUrl } from "./api";
 import type {
+  AuthSession,
   RecommendationSessionRequest,
   RecommendationSessionResponse,
+  ScoredRecommendation,
   ViewerProfile,
   ViewerSignalsSummary
 } from "./viewerTypes";
 
 export const VIEWER_PROFILE_KEY = "watchflow:viewer-profile:v1";
-export const VIEWER_CONNECTED_KEY = "watchflow:youtube-connected:v1";
+export const VIEWER_PROFILE_MIGRATED_KEY = "watchflow:viewer-profile-migrated:v1";
 
 export const defaultViewerProfile: ViewerProfile = {
   version: 1,
@@ -61,25 +64,57 @@ export async function saveViewerProfile(profile: ViewerProfile): Promise<ViewerP
   return normalized;
 }
 
-export function getStoredConnection() {
-  return storageAvailable() && window.localStorage.getItem(VIEWER_CONNECTED_KEY) === "true";
+export class ViewerApiError extends Error {
+  constructor(public status: number, public code: string, message: string, public details?: Record<string, unknown>) {
+    super(message);
+  }
 }
 
-export function saveStoredConnection(connected: boolean) {
-  if (storageAvailable()) window.localStorage.setItem(VIEWER_CONNECTED_KEY, String(connected));
+async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await fetch(`${apiBaseUrl}${path}`, {
+    ...init,
+    credentials: "include",
+    headers: init.body ? { "Content-Type": "application/json", ...init.headers } : init.headers
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as { error?: string; message?: string } & Record<string, unknown>;
+    throw new ViewerApiError(response.status, body.error ?? "request_failed", body.message ?? `Request failed with status ${response.status}.`, body);
+  }
+  if (response.status === 204) return undefined as T;
+  return response.json() as Promise<T>;
 }
 
-export async function getViewerSignals(connected: boolean, profile: ViewerProfile): Promise<ViewerSignalsSummary> {
-  const pending = connected ? "Connected; live import is not active in this demo." : "Connect YouTube to make this signal available.";
+export async function getAuthSession() {
+  return apiRequest<AuthSession>("/api/auth/session");
+}
+
+export async function getLiveViewerProfile() {
+  return apiRequest<{ profile: ViewerProfile; source: "default" | "persisted" }>("/api/viewer/profile");
+}
+
+export async function saveLiveViewerProfile(profile: ViewerProfile) {
+  const response = await apiRequest<{ profile: ViewerProfile }>("/api/viewer/profile", { method: "PUT", body: JSON.stringify(profile) });
+  return response.profile;
+}
+
+export async function migrateLocalProfile(profile: ViewerProfile, source: "default" | "persisted") {
+  if (!storageAvailable() || source !== "default" || window.localStorage.getItem(VIEWER_PROFILE_MIGRATED_KEY) === "true") return profile;
+  const migrated = await saveLiveViewerProfile(profile);
+  window.localStorage.setItem(VIEWER_PROFILE_MIGRATED_KEY, "true");
+  return migrated;
+}
+
+export async function getViewerSignals(_connected: boolean, profile: ViewerProfile): Promise<ViewerSignalsSummary> {
+  const pending = "Live import is not active in demo mode. Connect YouTube to use this signal.";
   return {
     mode: "demo",
-    connected,
+    connected: false,
     subscriptions: {
-      state: profile.useSubscriptions ? (connected ? "pending" : "available") : "disabled",
+      state: profile.useSubscriptions ? "available" : "disabled",
       detail: profile.useSubscriptions ? pending : "Disabled in your taste profile."
     },
     likedVideos: {
-      state: profile.useLikedVideos ? (connected ? "pending" : "available") : "disabled",
+      state: profile.useLikedVideos ? "available" : "disabled",
       detail: profile.useLikedVideos ? pending : "Disabled in your taste profile."
     },
     watchHistory: { state: "unavailable", detail: "YouTube does not expose watch history through the Data API." },
@@ -87,10 +122,54 @@ export async function getViewerSignals(connected: boolean, profile: ViewerProfil
   };
 }
 
+export async function getLiveViewerSignals() {
+  return apiRequest<ViewerSignalsSummary>("/api/viewer/signals");
+}
+
+export async function requestLiveSync(force = false) {
+  return apiRequest<{ status: "queued" | "already_running" | "fresh"; jobId: string | null; nextAllowedAt?: string }>(`/api/viewer/sync${force ? "?force=true" : ""}`, { method: "POST" });
+}
+
 export async function createRecommendationSession(
   request: RecommendationSessionRequest,
-  profile: ViewerProfile
+  profile: ViewerProfile,
+  mode: "demo" | "live" = "demo"
 ): Promise<RecommendationSessionResponse> {
+  if (mode === "live") {
+    return apiRequest<RecommendationSessionResponse>("/api/recommendations/session", { method: "POST", body: JSON.stringify(request) });
+  }
   await new Promise((resolve) => window.setTimeout(resolve, 450));
   return createDemoSession(request, profile);
+}
+
+export async function getQueue() {
+  return apiRequest<{ items: ScoredRecommendation[] }>("/api/queue");
+}
+
+export async function saveToQueue(videoId: string) {
+  return apiRequest<{ videoId: string; saved: true }>("/api/queue", { method: "POST", body: JSON.stringify({ videoId }) });
+}
+
+export async function removeFromQueue(videoId: string) {
+  return apiRequest<void>(`/api/queue/${encodeURIComponent(videoId)}`, { method: "DELETE" });
+}
+
+export async function sendFeedback(videoId: string, reason: "already_watched" | "not_interested" | "too_long" | "too_often") {
+  return apiRequest<void>(`/api/recommendations/${encodeURIComponent(videoId)}/feedback`, { method: "POST", body: JSON.stringify({ reason }) });
+}
+
+export async function recordOpened(videoId: string) {
+  return apiRequest<void>(`/api/recommendations/${encodeURIComponent(videoId)}/opened`, { method: "POST" });
+}
+
+export async function logout() {
+  return apiRequest<void>("/api/auth/logout", { method: "POST" });
+}
+
+export async function disconnectYoutube() {
+  return apiRequest<void>("/api/auth/youtube", { method: "DELETE" });
+}
+
+export async function deleteViewerAccount() {
+  return apiRequest<void>("/api/viewer/account", { method: "DELETE" });
 }

@@ -22,15 +22,48 @@ export type ViewerProfile = {
   useLikedVideos: boolean;
 };
 
-export type SignalState = "available" | "disabled" | "unavailable" | "pending";
+export type SignalState = "available" | "ready" | "disabled" | "unavailable" | "pending" | "error";
+
+export type SyncSummary = {
+  id: string;
+  status: "queued" | "running" | "succeeded" | "failed";
+  phase: string;
+  subscriptionsCount: number;
+  likedVideosCount: number;
+  candidatesCount: number;
+  errorCode: string | null;
+  errorMessage: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+};
 
 export type ViewerSignalsSummary = {
   mode: "demo" | "live";
   connected: boolean;
-  subscriptions: { state: SignalState; detail: string };
-  likedVideos: { state: SignalState; detail: string };
+  needsReconnect?: boolean;
+  stale?: boolean;
+  lastSyncedAt?: string | null;
+  subscriptions: { state: SignalState; detail: string; count?: number };
+  likedVideos: { state: SignalState; detail: string; count?: number };
   watchHistory: { state: "unavailable"; detail: string };
   watchLater: { state: "unavailable"; detail: string };
+  sync?: SyncSummary | null;
+};
+
+export type AuthenticatedViewer = {
+  id: string;
+  displayName: string;
+  email: string;
+  avatarUrl: string | null;
+};
+
+export type AuthSession = {
+  authenticated: true;
+  user: AuthenticatedViewer;
+  youtube: { connected: boolean; needsReconnect: boolean; lastSyncedAt: string | null };
+  profile: ViewerProfile | null;
+} | {
+  authenticated: false;
 };
 
 export type Recommendation = {
@@ -58,6 +91,7 @@ export type ScoredRecommendation = Recommendation & {
   match: number;
   reason: string;
   recommendationSignals: string[];
+  youtubeUrl?: string;
 };
 
 export type RecommendationSessionRequest = {
@@ -79,5 +113,6 @@ export type RecommendationSessionResponse = {
   totalMinutes: number;
   naturalEnd: true;
   items: ScoredRecommendation[];
-  emptyReason?: "no_source_matches" | "no_filter_matches";
+  emptyReason?: "no_source_matches" | "no_filter_matches" | "quota_limited";
+  quotaLimited?: boolean;
 };
