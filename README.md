@@ -59,13 +59,17 @@ Obecne demo korzysta z lokalnego adaptera o kształcie przyszłych endpointów. 
 
 ## Uruchomienie lokalne
 
-```bash
+```powershell
 npm install
+Copy-Item .env.example backend/.env
+Copy-Item frontend/.env.example frontend/.env
 npm run dev:backend
 npm run dev:frontend
 ```
 
-Frontend zwykle otwiera się pod `http://localhost:5173`; Vite wybierze następny wolny port, jeśli ten jest zajęty. Skopiuj `.env.example` do `.env` i wpisz własne dane Google Cloud dla OAuth. Nigdy nie zapisuj prawdziwych sekretów ani tokenów w repozytorium.
+Backend i frontend uruchamia się w osobnych terminalach. Frontend zwykle otwiera się pod `http://localhost:5173`; jeżeli Vite wybierze inny port, trzeba zaktualizować `CLIENT_ORIGIN` w `backend/.env` i ponownie uruchomić backend.
+
+Pełna instrukcja dla Windows, macOS i Linux, konfiguracja Google Cloud oraz opis dostępu dla użytkowników testowych znajdują się w pliku [docs/uruchomienie-lokalne.md](docs/uruchomienie-lokalne.md). Nigdy nie zapisuj prawdziwych sekretów ani tokenów w repozytorium.
 
 ## Status projektu
 

@@ -1,53 +1,62 @@
 # AGENTS.md
 
-## Project Identity
+## Tożsamość projektu
 
-This project is **Watchflow**, a portfolio-grade YouTube discovery application for everyday viewers. Its main purpose is to help a person choose a genuinely suitable video for the time, mood, and goal they have right now.
+Projekt nazywa się **Watchflow**. Jest to aplikacja portfolio pomagająca zwykłym użytkownikom YouTube wybrać film dopasowany do dostępnego czasu, nastroju i celu.
 
-Creator analytics may exist as a separate optional module, but it must not dominate the product, navigation, data model, or copy.
+Analityka twórców może istnieć jako osobny, opcjonalny moduł, ale nie może dominować produktu, nawigacji, modelu danych ani treści interfejsu.
 
-## Product Direction
+## Kierunek produktu
 
-- Build for ordinary YouTube viewers, not primarily for channel owners.
-- Prefer intentional, finite viewing sessions over an endless recommendation feed.
-- Make recommendation logic understandable through concise "why this fits" explanations.
-- Let users directly edit their taste profile and give semantic rejection feedback.
-- Treat saved-video overload, repetitive recommendations, clickbait, and loss of time as product problems.
-- Keep the app useful in demo mode and polished enough for a portfolio review.
+- Projektuj dla zwykłych widzów YouTube, a nie przede wszystkim dla właścicieli kanałów.
+- Preferuj celowe, skończone sesje oglądania zamiast nieskończonego feedu.
+- Wyjaśniaj rekomendacje krótką informacją, dlaczego dany materiał pasuje.
+- Pozwalaj użytkownikowi edytować profil zainteresowań i podawać konkretny powód odrzucenia rekomendacji.
+- Traktuj przepełnione listy zapisanych filmów, powtarzalne rekomendacje, clickbait i utratę czasu jako problemy produktowe.
+- Demo ma pozostać użyteczne bez konfiguracji zewnętrznych usług i wystarczająco dopracowane do prezentacji w portfolio.
 
-## YouTube Data Constraints
+## Ograniczenia YouTube Data API
 
-- Do not promise access to a user's YouTube watch history; the YouTube Data API does not expose it.
-- Future personalization may use read-only subscriptions, liked videos, accessible user playlists, explicit preferences, and activity captured inside Watchflow. Watch history and Watch Later items are not available through the YouTube Data API.
-- Keep YouTube API keys, OAuth client secrets, access tokens, and refresh tokens on the backend only.
-- Use quota-aware requests, caching, cooldowns, and clear stale-data states.
+- Nie obiecuj dostępu do historii oglądania użytkownika; YouTube Data API jej nie udostępnia.
+- Przyszła personalizacja może korzystać z subskrypcji, polubionych filmów, dostępnych playlist, jawnych preferencji i aktywności wykonanej wewnątrz Watchflow. Historia oglądania i elementy Watch Later nie są dostępne przez YouTube Data API.
+- Klucze YouTube API, sekrety klienta OAuth, access tokeny i refresh tokeny przechowuj wyłącznie po stronie backendu.
+- Projektuj zapytania z uwzględnieniem limitów API, cache, cooldownów i czytelnych stanów nieaktualnych danych.
 
-## Technical Direction
+## Kierunek techniczny
 
-- Frontend: React + TypeScript.
-- Backend: Node.js + Express + TypeScript.
-- Planned persistence: PostgreSQL.
-- Google OAuth is backend-owned and should use the least powerful scopes required.
-- Demo data and local visual assets must remain available without credentials.
-- Keep frontend, recommendation logic, YouTube integration, persistence, and optional creator analytics separated.
+- Frontend: React i TypeScript.
+- Backend: Node.js, Express i TypeScript.
+- Planowana trwałość danych: PostgreSQL.
+- Google OAuth należy do backendu i powinien używać najmniejszego wystarczającego zakresu uprawnień.
+- Dane demonstracyjne i lokalne zasoby wizualne muszą działać bez danych dostępowych.
+- Oddzielaj frontend, ranking rekomendacji, integrację YouTube, trwałość danych i opcjonalną analitykę twórców.
 
-## UX Guidelines
+## Zasady UX
 
-- Use a restrained dark interface with YouTube-red reserved for primary actions and selection.
-- Keep navigation understandable without creator terminology.
-- Preserve readable hierarchy, stable component dimensions, keyboard focus, WCAG AA contrast, and reduced-motion support.
-- Always handle loading, empty, disconnected, OAuth error, quota, and no-recommendation states.
-- Dynamic content must not overlap controls or cause avoidable layout jumps.
+- Używaj stonowanego, ciemnego interfejsu z czerwienią YouTube przeznaczoną dla głównych akcji i zaznaczeń.
+- Nawigacja ma być zrozumiała bez terminologii przeznaczonej dla twórców.
+- Zachowuj czytelną hierarchię, stabilne wymiary komponentów, widoczny focus klawiatury, kontrast WCAG AA i obsługę ograniczonego ruchu.
+- Obsługuj stany ładowania, pustych danych, rozłączenia, błędu OAuth, wyczerpania limitu i braku rekomendacji.
+- Dynamiczna zawartość nie może nachodzić na kontrolki ani powodować niepotrzebnych przeskoków układu.
 
-## Engineering Guidelines
+## Zasady inżynierskie
 
-- Add tests around session building, preference controls, recommendation feedback, OAuth behavior, quota handling, and API errors.
-- Do not infer unavailable YouTube data or present demo recommendations as live personalization.
-- Keep `.env.example` synchronized with configuration changes.
-- Record important product and technical decisions in `docs/project-plan.md`.
+- Dodawaj testy dla budowania sesji, preferencji, feedbacku rekomendacji, OAuth, limitów API i błędów backendu.
+- Nie wyprowadzaj wniosków z niedostępnych danych YouTube i nie przedstawiaj rekomendacji demo jako prawdziwej personalizacji.
+- Utrzymuj `.env.example` zgodnie ze zmianami konfiguracji.
+- Ważne decyzje produktowe i techniczne zapisuj w `docs/project-plan.md`.
 
-## Documentation Language
+## Git i GitHub
 
-- Write `README.md`, files under `docs/`, and other files that describe or explain the project in Polish.
-- Keep this rule for future documentation updates unless the user explicitly requests a different language.
-- Source-code identifiers and established technical terms may remain in English where that improves clarity.
+- Jedno ukończone zadanie lub jedna spójna poprawka powinny tworzyć jeden lokalny commit.
+- Przed commitem sprawdź diff i uruchom testy odpowiednie do zakresu zmiany.
+- Stosuj komunikaty Conventional Commits, między innymi `feat:`, `fix:`, `docs:`, `test:` i `chore:`.
+- Dodawaj do indeksu wyłącznie pliki związane z bieżącym zadaniem.
+- Nigdy nie commituj plików `.env`, tokenów, kluczy API ani innych sekretów.
+- Nie wykonuj `git push` bez jednoznacznego polecenia użytkownika. Po zakończeniu pracy podaj hash lokalnego commita i wynik weryfikacji.
+
+## Język dokumentacji
+
+- `README.md`, pliki w `docs/` i inne pliki opisujące projekt pisz po polsku.
+- Zachowaj tę zasadę w przyszłych aktualizacjach, chyba że użytkownik wyraźnie poprosi o inny język.
+- Identyfikatory w kodzie i utrwalone terminy techniczne mogą pozostać po angielsku, jeśli poprawia to czytelność.
