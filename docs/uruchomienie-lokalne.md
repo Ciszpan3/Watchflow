@@ -120,9 +120,9 @@ W drugim:
 npm run dev:frontend
 ```
 
-API działa domyślnie pod `http://localhost:4000`, a Vite pod `http://localhost:5173`. Zdrowie API sprawdzisz pod `http://localhost:4000/health`.
+API działa domyślnie pod `http://localhost:4000`, a Vite pod stałym adresem `http://localhost:5173`. Zdrowie API sprawdzisz pod `http://localhost:4000/health`.
 
-Jeżeli Vite wybierze np. `5175`, ustaw `CLIENT_ORIGIN=http://localhost:5175` i uruchom backend ponownie. `VITE_API_BASE_URL` nadal powinien wskazywać port backendu `4000`.
+Skrypt deweloperski używa `--strictPort`, dlatego przy zajętym porcie `5173` zakończy się czytelnym błędem zamiast po cichu uruchomić frontend na innym porcie. Zamknij stary proces Vite i uruchom polecenie ponownie. `CLIENT_ORIGIN` musi pozostać zgodny z adresem frontendu, a `VITE_API_BASE_URL` powinien wskazywać port backendu `4000`.
 
 ## Co dzieje się po logowaniu
 
