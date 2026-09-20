@@ -38,10 +38,10 @@ Sekrety trafiają wyłącznie do `backend/.env`. Plik `frontend/.env` zawiera ty
 Utwórz pustą bazę `watchflow`. Przykład, gdy polecenia PostgreSQL są dostępne w `PATH`:
 
 ```powershell
-createdb -U postgres watchflow
+createdb -U postgres --encoding=UTF8 --template=template0 watchflow
 ```
 
-Można też utworzyć bazę w pgAdmin. Następnie dopasuj hasło i port w `backend/.env`:
+Można też utworzyć bazę w pgAdmin, wybierając kodowanie **UTF8**. Jest ono wymagane, ponieważ tytuły i opisy z YouTube mogą zawierać emoji oraz znaki z wielu alfabetów. Następnie dopasuj hasło i port w `backend/.env`:
 
 ```env
 DATABASE_URL=postgresql://postgres:twoje-haslo@localhost:5432/watchflow
@@ -132,6 +132,9 @@ Skrypt deweloperski używa `--strictPort`, dlatego przy zajętym porcie `5173` z
 - przeglądarka dostaje tylko losowe cookie sesyjne `HttpOnly`, `SameSite=Lax`;
 - frontend uruchamia synchronizację, gdy dane są starsze niż sześć godzin;
 - ręczna synchronizacja ma 15-minutowy cooldown;
+- pojedyncze zapytanie do YouTube jest przerywane po 15 sekundach, a całe zadanie po pięciu minutach;
+- kanały są importowane w kontrolowanych grupach po pięć operacji, aby przyspieszyć synchronizację bez przeciążania API;
+- po restarcie backendu przerwane zadanie zostaje automatycznie zwolnione i można uruchomić je ponownie;
 - wylogowanie usuwa bieżącą sesję, odłączenie usuwa import i token, a usunięcie konta kasuje wszystkie dane użytkownika.
 
 ## Najczęstsze problemy
@@ -152,9 +155,19 @@ Uzupełnij `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` i `GOOGLE_REDIRECT_URI` w 
 
 Zgoda albo refresh token wygasły. Kliknij **Reconnect YouTube**. Profil, kolejka i feedback pozostaną w bazie.
 
+### Synchronizacja trwa zbyt długo albo została przerwana
+
+Standardowo pierwsza synchronizacja może potrwać od kilkunastu sekund do kilku minut, zależnie od liczby subskrypcji i odpowiedzi YouTube. Po pięciu minutach zadanie kończy się czytelnym błędem zamiast pozostawać w stanie aktywnym bez końca. Po restarcie backendu przerwane zadanie także zostaje zwolnione automatycznie. Użyj przycisku **Retry sync**, aby rozpocząć nową próbę.
+
+Limity można dostosować w `backend/.env` przez `YOUTUBE_REQUEST_TIMEOUT_MS`, `SYNC_JOB_TIMEOUT_MINUTES` i `SYNC_CONCURRENCY`. Zwiększanie równoległości ponad wartość domyślną `5` nie jest zalecane bez sprawdzenia limitów i stabilności API.
+
 ### Błąd połączenia z PostgreSQL
 
 Sprawdź usługę PostgreSQL, nazwę bazy, hasło i port w `DATABASE_URL`. Następnie uruchom `npm run db:status`.
+
+### `DATABASE_URL must point to a UTF8 PostgreSQL database`
+
+Baza została utworzona w lokalnym kodowaniu, na przykład `WIN1250`, które nie obsługuje wszystkich metadanych YouTube. Utwórz nową bazę poleceniem z sekcji **PostgreSQL i Prisma**, przenieś dane i ustaw jej adres w `DATABASE_URL`. Sama zmiana kodowania istniejącej bazy nie jest obsługiwana przez PostgreSQL.
 
 ### CORS lub powrót na niewłaściwy frontend
 

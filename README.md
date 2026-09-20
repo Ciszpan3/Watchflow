@@ -41,7 +41,7 @@ React + TypeScript
 
 ## Szybki start
 
-Po utworzeniu bazy PostgreSQL `watchflow`:
+Po utworzeniu bazy PostgreSQL `watchflow` z wymaganym kodowaniem `UTF8`:
 
 ```powershell
 npm install

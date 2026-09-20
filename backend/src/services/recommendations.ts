@@ -58,7 +58,7 @@ async function searchNewVideos(userId: string, request: RecommendationRequest, p
         relevanceLanguage: language,
         safeSearch: "moderate",
         videoEmbeddable: "true"
-      });
+      }, { timeout: env.youtubeRequestTimeoutMs });
       ids = (response.data.items ?? []).map((item) => item.id?.videoId).filter((id): id is string => Boolean(id));
       const details = await videoDetails(youtube, ids);
       ids = [];

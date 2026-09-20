@@ -1,5 +1,7 @@
 import type { youtube_v3 } from "googleapis";
+import { env } from "../config/env.js";
 import { db } from "../db.js";
+import { Prisma } from "../generated/prisma/client.js";
 import { classifyVideo } from "./classification.js";
 import { decryptSecret } from "./security.js";
 import { createYoutubeClientWithRefreshToken } from "./youtube.js";
@@ -42,6 +44,36 @@ export async function upsertChannel(item: youtube_v3.Schema$Channel) {
       subscriberCount: item.statistics?.subscriberCount ? BigInt(item.statistics.subscriberCount) : null
     }
   });
+}
+
+export async function upsertChannels(items: youtube_v3.Schema$Channel[]) {
+  const now = new Date();
+  const rows = items.flatMap((item) => item.id ? [Prisma.sql`(
+    ${item.id},
+    ${item.snippet?.title ?? "Untitled channel"},
+    ${item.snippet?.description ?? null},
+    ${item.snippet?.thumbnails?.default?.url ?? null},
+    ${item.contentDetails?.relatedPlaylists?.uploads ?? null},
+    ${item.statistics?.subscriberCount ? BigInt(item.statistics.subscriberCount) : null},
+    ${now},
+    ${now}
+  )`] : []);
+  if (!rows.length) return;
+
+  await db.$executeRaw(Prisma.sql`
+    INSERT INTO "Channel" (
+      "id", "title", "description", "thumbnailUrl", "uploadPlaylistId",
+      "subscriberCount", "createdAt", "updatedAt"
+    )
+    VALUES ${Prisma.join(rows)}
+    ON CONFLICT ("id") DO UPDATE SET
+      "title" = EXCLUDED."title",
+      "description" = EXCLUDED."description",
+      "thumbnailUrl" = EXCLUDED."thumbnailUrl",
+      "uploadPlaylistId" = EXCLUDED."uploadPlaylistId",
+      "subscriberCount" = EXCLUDED."subscriberCount",
+      "updatedAt" = EXCLUDED."updatedAt"
+  `);
 }
 
 export async function upsertVideo(item: youtube_v3.Schema$Video) {
@@ -97,13 +129,14 @@ export async function upsertVideo(item: youtube_v3.Schema$Video) {
   });
 }
 
-export async function videoDetails(youtube: youtube_v3.Youtube, ids: string[]) {
+export async function videoDetails(youtube: youtube_v3.Youtube, ids: string[], assertActive?: () => void) {
   const items: youtube_v3.Schema$Video[] = [];
   for (let index = 0; index < ids.length; index += 50) {
+    assertActive?.();
     const response = await youtube.videos.list({
       part: ["snippet", "contentDetails", "statistics", "liveStreamingDetails"],
       id: ids.slice(index, index + 50)
-    });
+    }, { timeout: env.youtubeRequestTimeoutMs });
     items.push(...(response.data.items ?? []));
   }
   return items;

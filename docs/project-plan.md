@@ -18,6 +18,8 @@ Watchflow pomaga widzowi świadomie wybrać film pasujący do czasu, intencji i 
 
 Synchronizacja pobiera wszystkie dostępne subskrypcje, maksymalnie 200 ostatnich polubionych filmów oraz po trzy ostatnie materiały z maksymalnie 40 kanałów. Najpierw wybiera kanały występujące w polubieniach, a pozostałe rotuje między synchronizacjami.
 
+Import ma ograniczoną równoległość, limit czasu dla pojedynczych żądań YouTube oraz limit całego zadania. Przerwany proces nie może pozostawić użytkownika z trwałym stanem `RUNNING`: przy następnym uruchomieniu backend oznacza takie zadania jako nieudane i pozwala wykonać ponowną próbę.
+
 Polubienia są sygnałem gustu, a nie osobnym źródłem kandydatów. Historia oglądania i Watch Later pozostają niedostępne przez YouTube Data API.
 
 Nowi twórcy są wyszukiwani maksymalnie dla dwóch języków na sesję. Wyniki `search.list` są przechowywane przez 12 godzin. Atomowy licznik zatrzymuje aplikację przy 80 wywołaniach dziennie, pozostawiając margines bezpieczeństwa.

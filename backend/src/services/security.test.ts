@@ -15,8 +15,11 @@ describe("token security", () => {
 
   it("rejects ciphertext modified after encryption", () => {
     const encrypted = encryptSecret("refresh-token-value");
-    const replacement = encrypted.endsWith("A") ? "B" : "A";
-    expect(() => decryptSecret(`${encrypted.slice(0, -1)}${replacement}`)).toThrow();
+    const parts = encrypted.split(".");
+    const ciphertext = Buffer.from(parts[3], "base64url");
+    ciphertext[0] ^= 1;
+    parts[3] = ciphertext.toString("base64url");
+    expect(() => decryptSecret(parts.join("."))).toThrow();
   });
 
   it("creates opaque session tokens and compares state safely", () => {

@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { env } from "./config/env.js";
-import { db } from "./db.js";
+import { assertUtf8Database, db } from "./db.js";
+import { SyncStatus } from "./generated/prisma/enums.js";
+import { recoverOrphanedSyncJobs } from "./services/viewerSync.js";
+import { upsertChannels } from "./services/youtubeLive.js";
 
 const databaseTest = describe.runIf(Boolean(env.databaseUrl));
 
@@ -10,6 +13,10 @@ databaseTest("PostgreSQL repositories", () => {
   let userId = "";
   const channelId = `test-channel-${suffix}`;
   const videoId = `test-video-${suffix}`;
+
+  it("uses UTF8 for international YouTube metadata", async () => {
+    await expect(assertUtf8Database()).resolves.toBeUndefined();
+  });
 
   afterAll(async () => {
     if (userId) await db.user.deleteMany({ where: { id: userId } });
@@ -29,6 +36,8 @@ databaseTest("PostgreSQL repositories", () => {
     });
     userId = user.id;
     await db.channel.create({ data: { id: channelId, title: "Test channel" } });
+    await upsertChannels([{ id: channelId, snippet: { title: "Updated test channel" } }]);
+    await expect(db.channel.findUniqueOrThrow({ where: { id: channelId } })).resolves.toMatchObject({ title: "Updated test channel" });
     await db.video.create({
       data: { id: videoId, channelId, title: "Test video", durationSeconds: 120, tags: [], format: "short", topics: ["technology"], intents: ["learn"] }
     });
@@ -36,5 +45,19 @@ databaseTest("PostgreSQL repositories", () => {
     await expect(db.savedVideo.create({ data: { userId, videoId } })).rejects.toMatchObject({ code: "P2002" });
     await db.syncJob.create({ data: { userId, activeKey: userId } });
     await expect(db.syncJob.create({ data: { userId, activeKey: userId } })).rejects.toMatchObject({ code: "P2002" });
+  });
+
+  it("releases an interrupted synchronization job", async () => {
+    const recovered = await recoverOrphanedSyncJobs("test_interruption");
+    const job = await db.syncJob.findFirstOrThrow({ where: { userId }, orderBy: { startedAt: "desc" } });
+
+    expect(recovered).toBeGreaterThanOrEqual(1);
+    expect(job).toMatchObject({
+      status: SyncStatus.FAILED,
+      activeKey: null,
+      phase: "failed",
+      errorCode: "test_interruption"
+    });
+    expect(job.finishedAt).not.toBeNull();
   });
 });
