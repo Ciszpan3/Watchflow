@@ -99,9 +99,9 @@ export async function saveLiveViewerProfile(profile: ViewerProfile) {
   return response.profile;
 }
 
-export async function migrateLocalProfile(profile: ViewerProfile, source: "default" | "persisted") {
-  if (!storageAvailable() || source !== "default" || window.localStorage.getItem(VIEWER_PROFILE_MIGRATED_KEY) === "true") return profile;
-  const migrated = await saveLiveViewerProfile(profile);
+export async function migrateLocalProfile(localProfile: ViewerProfile, serverProfile: ViewerProfile, source: "default" | "persisted") {
+  if (!storageAvailable() || source !== "default" || window.localStorage.getItem(VIEWER_PROFILE_MIGRATED_KEY) === "true") return serverProfile;
+  const migrated = await saveLiveViewerProfile(localProfile);
   window.localStorage.setItem(VIEWER_PROFILE_MIGRATED_KEY, "true");
   return migrated;
 }

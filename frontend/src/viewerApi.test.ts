@@ -88,13 +88,24 @@ describe("viewer profile adapter", () => {
   });
 
   it("migrates a local profile only once when the server profile is untouched", async () => {
-    const completed = { ...defaultViewerProfile, status: "completed" as const };
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ profile: completed }), { status: 200 }));
+    const localProfile = { ...defaultViewerProfile, status: "completed" as const, interests: ["gaming", "health", "technology"] };
+    const serverProfile = { ...defaultViewerProfile, status: "not_started" as const };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ profile: localProfile }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
-    await expect(migrateLocalProfile(completed, "default")).resolves.toEqual(completed);
-    await migrateLocalProfile(completed, "default");
+    await expect(migrateLocalProfile(localProfile, serverProfile, "default")).resolves.toEqual(localProfile);
+    await expect(migrateLocalProfile(defaultViewerProfile, localProfile, "default")).resolves.toEqual(localProfile);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(window.localStorage.getItem(VIEWER_PROFILE_MIGRATED_KEY)).toBe("true");
+  });
+
+  it("always keeps an existing server profile as the live source of truth", async () => {
+    const localProfile = { ...defaultViewerProfile, interests: ["science", "design", "cooking"] };
+    const serverProfile = { ...defaultViewerProfile, status: "completed" as const, interests: ["gaming", "health", "technology"] };
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(migrateLocalProfile(localProfile, serverProfile, "persisted")).resolves.toEqual(serverProfile);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("sends persistent queue and feedback actions to their live endpoints", async () => {

@@ -7,6 +7,7 @@ import {
   Heart,
   History,
   ListVideo,
+  LoaderCircle,
   Sparkles,
   ThumbsUp,
   Users,
@@ -80,13 +81,14 @@ export function OnboardingModal({ open, profile, signals, editing, onProgress, o
   signals: ViewerSignalsSummary;
   editing: boolean;
   onProgress: (profile: ViewerProfile) => void;
-  onComplete: (profile: ViewerProfile) => void;
+  onComplete: (profile: ViewerProfile) => Promise<void>;
   onSkip: (profile: ViewerProfile) => void;
   onClose: () => void;
 }) {
   const [step, setStep] = React.useState(1);
   const [draft, setDraft] = React.useState(profile);
   const [error, setError] = React.useState("");
+  const [saving, setSaving] = React.useState(false);
   const dialogRef = React.useRef<HTMLDivElement>(null);
   const draftRef = React.useRef(profile);
 
@@ -96,6 +98,7 @@ export function OnboardingModal({ open, profile, signals, editing, onProgress, o
     draftRef.current = profile;
     setStep(1);
     setError("");
+    setSaving(false);
   }, [open, profile]);
 
   React.useEffect(() => {
@@ -151,6 +154,17 @@ export function OnboardingModal({ open, profile, signals, editing, onProgress, o
     setError("");
     if (!editing) onProgress({ ...draft, status: "in_progress" });
     setStep((current) => Math.min(3, current + 1));
+  }
+
+  async function finishSetup() {
+    setSaving(true);
+    setError("");
+    try {
+      await onComplete({ ...draft, status: "completed" });
+    } catch {
+      setError("Your taste profile could not be saved. Check the connection and try again.");
+      setSaving(false);
+    }
   }
 
   return (
@@ -219,7 +233,7 @@ export function OnboardingModal({ open, profile, signals, editing, onProgress, o
           <button className="button text-button" type="button" onClick={() => editing ? onClose() : onSkip({ ...draft, status: "skipped" })}>{editing ? "Cancel changes" : "Skip for now"}</button>
           <div>
             {step > 1 && <button className="button secondary" type="button" onClick={() => { setError(""); setStep((current) => current - 1); }}><ArrowLeft />Back</button>}
-            {step < 3 ? <button className="button primary" type="button" onClick={nextStep}>Continue<ArrowRight /></button> : <button className="button primary" type="button" onClick={() => onComplete({ ...draft, status: "completed" })}><Check />{editing ? "Save profile" : "Finish setup"}</button>}
+            {step < 3 ? <button className="button primary" type="button" onClick={nextStep}>Continue<ArrowRight /></button> : <button className="button primary" type="button" onClick={() => void finishSetup()} disabled={saving}>{saving ? <LoaderCircle className="spin" /> : <Check />}{saving ? "Saving…" : editing ? "Save profile" : "Finish setup"}</button>}
           </div>
         </footer>
       </div>

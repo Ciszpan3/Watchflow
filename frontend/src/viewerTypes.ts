@@ -122,6 +122,6 @@ export type RecommendationSessionResponse = {
   recommendationMode: RecommendationMode;
   seenVideoIds: string[];
   items: ScoredRecommendation[];
-  emptyReason?: "no_source_matches" | "no_filter_matches" | "quota_limited";
+  emptyReason?: "no_source_matches" | "no_filter_matches" | "no_fresh_matches" | "quota_limited";
   quotaLimited?: boolean;
 };

@@ -13,6 +13,7 @@ Watchflow pomaga widzowi świadomie wybrać film pasujący do czasu, intencji i 
 - Po logowaniu aplikacja importuje stary lokalny profil tylko raz, jeżeli profil serwerowy nie został jeszcze zmieniony.
 - Synchronizacja działa automatycznie po przekroczeniu sześciu godzin oraz ręcznie z 15-minutowym cooldownem.
 - Demo jest osobnym, jawnym trybem i nie jest używane jako ukryte uzupełnienie danych live.
+- Po zalogowaniu profil z PostgreSQL jest źródłem prawdy. Lokalny profil może zostać przeniesiony tylko raz, gdy konto nie ma jeszcze własnych ustawień.
 - Szkic filtrów oraz ostatni zestaw rekomendacji są przywracane po odświeżeniu. Konto live przechowuje je w PostgreSQL, a demo w wersjonowanych kluczach `localStorage`.
 - Avatar Google jest pobierany wyłącznie z zaufanego hosta HTTPS, ograniczony do 1 MB i cache'owany w bazie. Interfejs używa inicjałów, gdy obraz jest niedostępny.
 
@@ -24,7 +25,7 @@ Import ma ograniczoną równoległość, limit czasu dla pojedynczych żądań Y
 
 Polubienia są sygnałem gustu, a nie osobnym źródłem kandydatów. Historia oglądania i Watch Later pozostają niedostępne przez YouTube Data API.
 
-Nowi twórcy są wyszukiwani maksymalnie dla dwóch języków na sesję. Wyniki `search.list` są przechowywane przez 12 godzin. Atomowy licznik zatrzymuje aplikację przy 80 wywołaniach dziennie, pozostawiając margines bezpieczeństwa.
+Nowi twórcy są wyszukiwani maksymalnie dla dwóch języków na sesję. Zapytanie ogranicza publikację do ostatnich 24 miesięcy, zachowując sortowanie według trafności. Wyniki `search.list` są przechowywane przez 12 godzin, a wersja polityki świeżości jest częścią klucza cache. Atomowy licznik zatrzymuje aplikację przy 80 wywołaniach dziennie, pozostawiając margines bezpieczeństwa.
 
 ## Ranking
 
@@ -37,6 +38,8 @@ Ranking jest deterministyczny:
 - głębokość i odkrywanie: 10%.
 
 Język i format są filtrami wymaganymi. Wykluczone tematy oraz obejrzane filmy są usuwane. Powtarzające się kanały i tematy otrzymują karę różnorodności. Przy wyłączonym limicie długość nie filtruje ani nie punktuje materiałów. Tryb sesji zwraca do trzech filmów, a tryb pojedynczego filmu pięć alternatyw preferujących długość w zakresie ±20% wskazanego czasu, co najmniej ±5 minut.
+
+Świeżość działa jako deterministyczna kara rankingu. Nowi twórcy starsi niż 24 miesiące są odrzucani. Materiały z subskrypcji od 24 do 36 miesięcy mogą pojawić się wyłącznie jako awaryjne uzupełnienie, a starsze są odrzucane.
 
 W trybie mieszanym sesja preferuje układ subskrypcja, nowy twórca, subskrypcja, a pięć alternatyw kontynuuje ten wzorzec. Tryby wyłączne nie rozszerzają samodzielnie źródła. `Next set` zachowuje wspólny łańcuch i wyklucza wszystkie materiały pokazane na wcześniejszych stronach.
 

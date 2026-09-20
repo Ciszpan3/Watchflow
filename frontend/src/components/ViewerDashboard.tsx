@@ -269,7 +269,7 @@ export function ViewerDashboard() {
           const [profileResponse, liveSignals, queue, draft, latest] = await Promise.all([
             getLiveViewerProfile(), getLiveViewerSignals(), getQueue(), getSessionDraft("live"), getLatestRecommendationSession("live")
           ]);
-          const liveProfile = await migrateLocalProfile(localProfile, profileResponse.source);
+          const liveProfile = await migrateLocalProfile(localProfile, profileResponse.profile, profileResponse.source);
           if (cancelled) return;
           setMode("live");
           setProfile(liveProfile);
@@ -354,7 +354,12 @@ export function ViewerDashboard() {
       const response = await createRecommendationSession(buildRequest(sourceOverride), profile, mode);
       setSession(response);
       saveLatestRecommendationSession(response);
-      setToast({ message: response.items.length ? response.recommendationMode === "single" ? "Five alternatives are ready." : "A fresh session is ready. It ends when the last card ends." : response.emptyReason === "quota_limited" ? "Today's discovery search limit has been reached. Subscription results remain available." : "No exact matches yet. Adjust a filter or broaden the source." });
+      const expectedCount = response.recommendationMode === "single" ? 5 : 3;
+      setToast({ message: response.items.length
+        ? response.items.length < expectedCount ? `Found ${response.items.length} fresh matches. Older videos were not used as filler.` : response.recommendationMode === "single" ? "Five fresh alternatives are ready." : "A fresh session is ready. It ends when the last card ends."
+        : response.emptyReason === "quota_limited" ? "Today's discovery search limit has been reached. Subscription results remain available."
+          : response.emptyReason === "no_fresh_matches" ? "No recent matches are available for these filters. Older videos were left out."
+            : "No exact matches yet. Adjust a filter or broaden the source." });
       window.requestAnimationFrame(() => document.querySelector("#discover")?.scrollIntoView({ behavior: "smooth", block: "start" }));
     } catch (error) {
       setAppError(error instanceof Error ? error.message : "Recommendations could not be created.");
@@ -399,15 +404,19 @@ export function ViewerDashboard() {
 
   const persistProgress = React.useCallback((draft: ViewerProfile) => { void (mode === "live" ? saveLiveViewerProfile(draft) : saveViewerProfile(draft)); }, [mode]);
   const closeOnboarding = React.useCallback(() => setOnboardingOpen(false), []);
-  const completeOnboarding = React.useCallback((draft: ViewerProfile) => {
-    void (mode === "live" ? saveLiveViewerProfile(draft) : saveViewerProfile(draft)).then(async (savedProfile) => {
+  const completeOnboarding = React.useCallback(async (draft: ViewerProfile) => {
+    try {
+      const savedProfile = await (mode === "live" ? saveLiveViewerProfile(draft) : saveViewerProfile(draft));
       setProfile(savedProfile);
       applyProfileDefaults(savedProfile);
       setSignals(mode === "live" ? await getLiveViewerSignals() : await getViewerSignals(false, savedProfile));
       setOnboardingOpen(false);
       setEditingProfile(false);
       setToast({ message: "Your taste profile is ready and stays fully editable." });
-    });
+    } catch (error) {
+      setAppError(error instanceof Error ? error.message : "Your taste profile could not be saved.");
+      throw error;
+    }
   }, [applyProfileDefaults, mode]);
   const skipOnboarding = React.useCallback((draft: ViewerProfile) => {
     void (mode === "live" ? saveLiveViewerProfile(draft) : saveViewerProfile(draft)).then(async (savedProfile) => {
@@ -521,7 +530,7 @@ export function ViewerDashboard() {
         </section>
 
         <section className="session-section" id="discover">
-          <div className="section-header"><div><span className="section-kicker">Made for this moment · Set {session.page}</span><h2>{session.items.length ? session.recommendationMode === "single" ? `${session.items.length} video alternatives` : `Your ${session.totalMinutes}-minute session` : session.page > 1 ? "No more matches" : "No exact matches yet"}</h2><p>{session.items.length ? session.recommendationMode === "single" ? "Choose one. Each card is a standalone option." : `${session.items.length} focused picks, ordered to flow naturally.` : "Change a filter or broaden the source to continue."}</p>{filtersChanged && session.items.length > 0 && <span className="results-outdated"><Clock3 />Filters changed after this set was generated</span>}</div>{session.items.length > 0 && session.naturalEnd && <div className="session-stop"><Check /><span><strong>Natural stopping point</strong>No endless feed after video {session.items.length}</span></div>}</div>
+          <div className="section-header"><div><span className="section-kicker">Made for this moment · Set {session.page}</span><h2>{session.items.length ? session.recommendationMode === "single" ? `${session.items.length} video alternatives` : `Your ${session.totalMinutes}-minute session` : session.page > 1 ? "No more matches" : session.emptyReason === "no_fresh_matches" ? "No recent matches" : "No exact matches yet"}</h2><p>{session.items.length ? session.items.length < (session.recommendationMode === "single" ? 5 : 3) ? "These are all current matches available. Older videos were not used as filler." : session.recommendationMode === "single" ? "Choose one. Each card is a standalone option." : `${session.items.length} focused picks, ordered to flow naturally.` : session.emptyReason === "no_fresh_matches" ? "Try broader filters. Watchflow left outdated videos out of this set." : "Change a filter or broaden the source to continue."}</p>{filtersChanged && session.items.length > 0 && <span className="results-outdated"><Clock3 />Filters changed after this set was generated</span>}</div>{session.items.length > 0 && session.naturalEnd && <div className="session-stop"><Check /><span><strong>Natural stopping point</strong>No endless feed after video {session.items.length}</span></div>}</div>
           {session.items.length ? <>{session.recommendationMode === "session" && <div className="session-timeline" aria-label={`${session.items.length} video session lasting ${session.totalMinutes} minutes`}>{session.items.map((video, index) => <span key={video.id} style={{ flex: video.duration }}><i>{index + 1}</i>{video.duration} min</span>)}<b>Done</b></div>}<div className={`recommendation-grid ${session.recommendationMode === "single" ? "single-mode" : ""}`}>{session.items.map((video) => <RecommendationCard key={video.id} video={video} live={mode === "live"} saved={saved.has(video.id)} onSave={() => void toggleSaved(video)} onPlay={() => void openVideo(video)} onReject={() => setFeedbackVideo(video)} />)}</div><div className="session-actions"><button className="button secondary next-set" type="button" onClick={() => void nextSet()} disabled={building || !session.hasMore}>{building ? <LoaderCircle className="spin" /> : <RefreshCcw />}{building ? "Finding another set…" : session.hasMore ? "Next set" : "No more matches"}</button><small>Previously shown videos will not repeat.</small></div></> : <div className="recommendation-empty"><Search /><strong>{mode === "live" && !signals.lastSyncedAt ? "Sync YouTube before your first live session" : session.page > 1 ? "You reached the end of these matches" : "Nothing fits every choice"}</strong><p>{mode === "live" && !signals.lastSyncedAt ? "Watchflow needs subscriptions and likes before it can rank real videos." : "We will never silently mix in a source you did not choose."}</p><div className="empty-actions">{mode === "live" && !signals.lastSyncedAt ? <button className="button secondary" type="button" onClick={() => void syncNow()} disabled={syncing}><RefreshCcw />Start sync</button> : <button className="button secondary" type="button" onClick={() => document.querySelector("#for-you")?.scrollIntoView({ behavior: "smooth" })}><SlidersHorizontal />Change filters</button>}{source !== "mixed" && <button className="button secondary" type="button" onClick={() => void generateSession("mixed")}><Users />Try Balanced instead</button>}</div></div>}
         </section>
 

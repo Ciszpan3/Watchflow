@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultViewerProfile } from "../viewerApi";
 import type { ViewerSignalsSummary } from "../viewerTypes";
@@ -62,5 +62,18 @@ describe("OnboardingModal", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel changes" }));
     expect(props.onClose).toHaveBeenCalledTimes(1);
     expect(props.onSkip).not.toHaveBeenCalled();
+  });
+
+  it("keeps the editor open and offers a retry when saving fails", async () => {
+    const onComplete = vi.fn().mockRejectedValue(new Error("offline"));
+    renderModal({ editing: true, profile: { ...defaultViewerProfile, status: "completed" as const }, onComplete });
+    fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+
+    expect(screen.getByRole("button", { name: "Saving…" })).toBeDisabled();
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("could not be saved"));
+    expect(screen.getByRole("button", { name: "Save profile" })).toBeEnabled();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 });

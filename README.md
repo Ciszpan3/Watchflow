@@ -11,10 +11,12 @@ Projekt jest pełnostackową aplikacją portfolio: łączy bezpieczne Google OAu
 - trwały profil zainteresowań i onboarding w PostgreSQL;
 - synchronizacja subskrypcji, maksymalnie 200 polubień oraz ostatnich filmów z wybranych subskrybowanych kanałów;
 - wyszukiwanie nowych twórców z 12-godzinnym cache i dziennym limitem bezpieczeństwa;
+- domyślne okno świeżości 24 miesięcy dla odkrywania oraz awaryjne materiały z subskrypcji nie starsze niż 36 miesięcy;
 - dwa tryby rekomendacji: sesja do trzech filmów mieszcząca się w łącznym limicie albo pięć alternatyw pojedynczego filmu;
 - opcjonalny limit czasu od 5 do 180 minut, wymagane filtry języka i formatu oraz wybór źródła;
 - kolejne zestawy bez powtarzania wcześniej pokazanych, obejrzanych lub odrzuconych materiałów;
 - trwały szkic filtrów i ostatni zestaw, synchronizowane przez PostgreSQL po zalogowaniu oraz `localStorage` w demo;
+- profil smaku przechowywany w PostgreSQL jako źródło prawdy dla zalogowanego użytkownika;
 - bezpiecznie cache'owany avatar Google i kontrolowane zastępniki brakujących obrazów;
 - trwała kolejka, rejestrowanie otwarć i feedback wpływający na kolejne wyniki;
 - rozłączenie YouTube, wylogowanie i trwałe usunięcie konta;
