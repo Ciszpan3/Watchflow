@@ -4,7 +4,7 @@ import { db } from "../db.js";
 import { type AuthenticatedRequest, optionalAuth, requireAuth } from "../middleware/auth.js";
 import { deleteSession } from "../services/sessions.js";
 import { requestViewerSync } from "../services/viewerSync.js";
-import { isProfileInput } from "../viewer/contracts.js";
+import { isProfileInput, isRecommendationRequest } from "../viewer/contracts.js";
 import { getOrCreateProfile, profileCreateData, serializeProfile } from "../viewer/profile.js";
 
 export const viewerRouter = Router();
@@ -32,6 +32,34 @@ viewerRouter.put("/profile", async (req, res, next) => {
       create: { userId, ...profileCreateData(req.body) }
     });
     res.json({ profile: serializeProfile(profile), source: "persisted" });
+  } catch (error) {
+    next(error);
+  }
+});
+
+viewerRouter.get("/session-draft", async (req, res, next) => {
+  try {
+    const draft = await db.viewerSessionDraft.findUnique({
+      where: { userId: (req as AuthenticatedRequest).authUser.id }
+    });
+    res.json({ request: draft?.request ?? null, updatedAt: draft?.updatedAt.toISOString() ?? null });
+  } catch (error) {
+    next(error);
+  }
+});
+
+viewerRouter.put("/session-draft", async (req, res, next) => {
+  try {
+    if (!isRecommendationRequest(req.body)) {
+      res.status(422).json({ error: "invalid_session_request", message: "Recommendation filters are invalid." });
+      return;
+    }
+    const draft = await db.viewerSessionDraft.upsert({
+      where: { userId: (req as AuthenticatedRequest).authUser.id },
+      update: { request: req.body },
+      create: { userId: (req as AuthenticatedRequest).authUser.id, request: req.body }
+    });
+    res.json({ request: draft.request, updatedAt: draft.updatedAt.toISOString() });
   } catch (error) {
     next(error);
   }

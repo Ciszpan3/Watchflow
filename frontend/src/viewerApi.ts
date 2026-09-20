@@ -11,6 +11,8 @@ import type {
 
 export const VIEWER_PROFILE_KEY = "watchflow:viewer-profile:v1";
 export const VIEWER_PROFILE_MIGRATED_KEY = "watchflow:viewer-profile-migrated:v1";
+export const VIEWER_SESSION_DRAFT_KEY = "watchflow:session-draft:v1";
+export const VIEWER_LAST_SESSION_KEY = "watchflow:last-session:v1";
 
 export const defaultViewerProfile: ViewerProfile = {
   version: 1,
@@ -140,6 +142,59 @@ export async function createRecommendationSession(
   }
   await new Promise((resolve) => window.setTimeout(resolve, 450));
   return createDemoSession(request, profile);
+}
+
+export async function getSessionDraft(mode: "demo" | "live") {
+  if (mode === "live") return apiRequest<{ request: RecommendationSessionRequest | null; updatedAt: string | null }>("/api/viewer/session-draft");
+  if (!storageAvailable()) return { request: null, updatedAt: null };
+  try {
+    const stored = window.localStorage.getItem(VIEWER_SESSION_DRAFT_KEY);
+    return stored ? JSON.parse(stored) as { request: RecommendationSessionRequest; updatedAt: string } : { request: null, updatedAt: null };
+  } catch {
+    return { request: null, updatedAt: null };
+  }
+}
+
+export async function saveSessionDraft(request: RecommendationSessionRequest, mode: "demo" | "live") {
+  if (mode === "live") return apiRequest<{ request: RecommendationSessionRequest; updatedAt: string }>("/api/viewer/session-draft", { method: "PUT", body: JSON.stringify(request) });
+  const value = { request, updatedAt: new Date().toISOString() };
+  if (storageAvailable()) window.localStorage.setItem(VIEWER_SESSION_DRAFT_KEY, JSON.stringify(value));
+  return value;
+}
+
+export async function getLatestRecommendationSession(mode: "demo" | "live") {
+  if (mode === "live") return apiRequest<{ session: RecommendationSessionResponse | null }>("/api/recommendations/session/latest");
+  if (!storageAvailable()) return { session: null };
+  try {
+    const stored = window.localStorage.getItem(VIEWER_LAST_SESSION_KEY);
+    if (!stored) return { session: null };
+    const parsed = JSON.parse(stored) as RecommendationSessionResponse;
+    const request = { ...parsed.request, timeLimitEnabled: parsed.request?.timeLimitEnabled ?? true, recommendationMode: parsed.request?.recommendationMode ?? "session" };
+    return { session: {
+      ...parsed,
+      chainId: parsed.chainId ?? `demo-chain-${Date.now()}`,
+      page: parsed.page ?? 1,
+      request,
+      recommendationMode: parsed.recommendationMode ?? request.recommendationMode,
+      naturalEnd: (parsed.recommendationMode ?? request.recommendationMode) === "session",
+      hasMore: parsed.hasMore ?? true,
+      seenVideoIds: parsed.seenVideoIds ?? parsed.items.map((item) => item.id)
+    } };
+  } catch {
+    return { session: null };
+  }
+}
+
+export function saveLatestRecommendationSession(session: RecommendationSessionResponse) {
+  if (storageAvailable() && session.mode === "demo") window.localStorage.setItem(VIEWER_LAST_SESSION_KEY, JSON.stringify(session));
+}
+
+export async function createNextRecommendationSession(session: RecommendationSessionResponse, profile: ViewerProfile) {
+  if (session.mode === "live") {
+    return apiRequest<RecommendationSessionResponse>(`/api/recommendations/session/${encodeURIComponent(session.sessionId)}/next`, { method: "POST" });
+  }
+  await new Promise((resolve) => window.setTimeout(resolve, 350));
+  return createDemoSession(session.request, profile, undefined, session.seenVideoIds, session.page + 1, session.chainId);
 }
 
 export async function getQueue() {

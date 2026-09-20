@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db } from "../db.js";
 import { FeedbackReason } from "../generated/prisma/enums.js";
 import { getAuthUser, optionalAuth, requireAuth } from "../middleware/auth.js";
-import { buildLiveSession } from "../services/recommendations.js";
+import { buildLiveSession, buildNextLiveSession, getLatestLiveSession } from "../services/recommendations.js";
 import { isInvalidGrant } from "../services/youtubeLive.js";
 import { isRecommendationRequest } from "../viewer/contracts.js";
 
@@ -20,6 +20,26 @@ recommendationsRouter.post("/session", async (req, res, next) => {
     if ((error as { code?: string }).code === "reconnect_required" || isInvalidGrant(error)) {
       await db.googleAccount.updateMany({ where: { userId: getAuthUser(req).id }, data: { needsReconnect: true } });
       res.status(401).json({ error: "reconnect_required", message: "Reconnect YouTube to refresh recommendations." });
+      return;
+    }
+    next(error);
+  }
+});
+
+recommendationsRouter.get("/session/latest", async (req, res, next) => {
+  try {
+    res.json({ session: await getLatestLiveSession(getAuthUser(req).id) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+recommendationsRouter.post("/session/:sessionId/next", async (req, res, next) => {
+  try {
+    res.json(await buildNextLiveSession(getAuthUser(req).id, req.params.sessionId));
+  } catch (error) {
+    if ((error as { code?: string }).code === "session_not_found") {
+      res.status(404).json({ error: "session_not_found", message: "Recommendation session was not found." });
       return;
     }
     next(error);

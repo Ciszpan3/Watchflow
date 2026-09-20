@@ -38,6 +38,7 @@ import {
 } from "../viewerData";
 import {
   createRecommendationSession,
+  createNextRecommendationSession,
   defaultViewerProfile,
   deleteViewerAccount,
   disconnectYoutube,
@@ -45,6 +46,8 @@ import {
   getLiveViewerProfile,
   getLiveViewerSignals,
   getQueue,
+  getLatestRecommendationSession,
+  getSessionDraft,
   getViewerProfile,
   getViewerSignals,
   logout,
@@ -53,6 +56,8 @@ import {
   removeFromQueue,
   requestLiveSync,
   saveLiveViewerProfile,
+  saveLatestRecommendationSession,
+  saveSessionDraft,
   saveToQueue,
   sendFeedback,
   saveViewerProfile
@@ -60,6 +65,7 @@ import {
 import type {
   AuthSession,
   LanguageCode,
+  RecommendationMode,
   RecommendationSessionRequest,
   ScoredRecommendation,
   SourceMode,
@@ -105,6 +111,8 @@ type Toast = { message: string; tone?: "success" | "info" };
 
 const initialRequest: RecommendationSessionRequest = {
   minutes: 45,
+  timeLimitEnabled: true,
+  recommendationMode: "session",
   intent: "learn",
   source: defaultViewerProfile.defaultSource,
   topics: [],
@@ -115,6 +123,17 @@ const initialRequest: RecommendationSessionRequest = {
   audioFriendly: defaultViewerProfile.audioFriendly,
   antiClickbait: defaultViewerProfile.antiClickbait
 };
+
+function SafeImage({ src, alt = "", className, fallback }: { src: string; alt?: string; className?: string; fallback?: React.ReactNode }) {
+  const [failed, setFailed] = React.useState(!src);
+  React.useEffect(() => setFailed(!src), [src]);
+  if (failed) return <span className={`image-fallback ${className ?? ""}`} aria-label={alt || undefined}>{fallback ?? <Youtube />}</span>;
+  return <img className={className} src={src} alt={alt} onError={() => setFailed(true)} />;
+}
+
+function initials(name: string) {
+  return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "WF";
+}
 
 const initialSignals: ViewerSignalsSummary = {
   mode: "demo",
@@ -133,7 +152,7 @@ function Sidebar({ open, active, session, mode, connected, signals, queueCount, 
     <>
       <aside className={`viewer-sidebar ${open ? "open" : ""}`} aria-label="Main navigation">
         <div className="viewer-brand"><span className="viewer-brand-mark"><Compass /></span><span>Watchflow</span><button className="icon-button mobile-only" type="button" onClick={onClose} aria-label="Close navigation"><X /></button></div>
-        <div className="demo-profile"><span className="profile-avatar">{viewer?.avatarUrl ? <img src={viewer.avatarUrl} alt="" /> : <UserRound />}</span><div><strong>{viewer?.displayName ?? "Guest profile"}</strong><span>{mode === "live" ? "Live taste profile" : "Local demo profile"}</span></div></div>
+        <div className="demo-profile"><span className="profile-avatar">{viewer?.avatarUrl ? <SafeImage src={`${apiBaseUrl}${viewer.avatarUrl}`} alt={`${viewer.displayName} profile`} fallback={<b>{initials(viewer.displayName)}</b>} /> : viewer ? <b>{initials(viewer.displayName)}</b> : <UserRound />}</span><div><strong>{viewer?.displayName ?? "Guest profile"}</strong><span>{mode === "live" ? "Live taste profile" : "Local demo profile"}</span></div></div>
         <nav>
           <span className="nav-label">Watch</span>
           {navItems.map((item) => { const Icon = item.icon; return <a key={item.id} className={active === item.id ? "active" : ""} href={`#${item.id}`} onClick={() => { onNavigate(item.id); onClose(); }}><Icon /><span>{item.label}</span>{item.id === "queue" && <small>{queueCount}</small>}</a>; })}
@@ -152,7 +171,7 @@ function RecommendationCard({ video, saved, live, onSave, onPlay, onReject }: {
 }) {
   return (
     <article className="recommendation-card">
-      <div className="video-image-wrap"><img src={video.image} alt="" /><span className="duration-badge">{video.duration}:00</span><span className="match-badge"><Sparkles />{video.match}% match</span><span className={`source-badge ${video.source}`}>{video.source === "subscribed" ? <UserCheck /> : <Telescope />}{video.source === "subscribed" ? "Subscribed" : "New creator"}</span></div>
+      <div className="video-image-wrap"><SafeImage src={video.image} alt="" /><span className="duration-badge">{video.duration}:00</span><span className="match-badge"><Sparkles />{video.match}% match</span><span className={`source-badge ${video.source}`}>{video.source === "subscribed" ? <UserCheck /> : <Telescope />}{video.source === "subscribed" ? "Subscribed" : "New creator"}</span></div>
       <div className="recommendation-copy">
         <div className="video-meta"><span>{video.channel}</span><i /><span>{video.views}</span><i /><span>{video.published}</span></div>
         <h3>{video.title}</h3>
@@ -181,6 +200,8 @@ export function ViewerDashboard() {
   const [onboardingOpen, setOnboardingOpen] = React.useState(false);
   const [editingProfile, setEditingProfile] = React.useState(false);
   const [minutes, setMinutes] = React.useState(initialRequest.minutes);
+  const [timeLimitEnabled, setTimeLimitEnabled] = React.useState(initialRequest.timeLimitEnabled);
+  const [recommendationMode, setRecommendationMode] = React.useState<RecommendationMode>(initialRequest.recommendationMode);
   const [intent, setIntent] = React.useState<WatchIntent>(initialRequest.intent);
   const [source, setSource] = React.useState<SourceMode>(initialRequest.source);
   const [topics, setTopics] = React.useState<string[]>([]);
@@ -192,6 +213,8 @@ export function ViewerDashboard() {
   const [antiClickbait, setAntiClickbait] = React.useState(initialRequest.antiClickbait);
   const [moreFilters, setMoreFilters] = React.useState(false);
   const [building, setBuilding] = React.useState(false);
+  const [hydrated, setHydrated] = React.useState(false);
+  const [saveState, setSaveState] = React.useState<"idle" | "saving" | "saved" | "error">("idle");
   const [session, setSession] = React.useState(() => createDemoSession(initialRequest, defaultViewerProfile));
   const [saved, setSaved] = React.useState(() => new Set(["city-history", "woodworking"]));
   const [liveQueue, setLiveQueue] = React.useState<ScoredRecommendation[]>([]);
@@ -208,6 +231,21 @@ export function ViewerDashboard() {
     setAudioFriendly(nextProfile.audioFriendly);
     setAntiClickbait(nextProfile.antiClickbait);
     setTopics([]);
+  }, []);
+
+  const applySessionRequest = React.useCallback((request: RecommendationSessionRequest) => {
+    setMinutes(request.minutes);
+    setTimeLimitEnabled(request.timeLimitEnabled);
+    setRecommendationMode(request.recommendationMode);
+    setIntent(request.intent);
+    setSource(request.source);
+    setTopics(request.topics);
+    setFormats(request.formats);
+    setLanguages(request.languages);
+    setNovelty(request.novelty);
+    setDepth(request.depth);
+    setAudioFriendly(request.audioFriendly);
+    setAntiClickbait(request.antiClickbait);
   }, []);
 
   React.useEffect(() => {
@@ -228,16 +266,22 @@ export function ViewerDashboard() {
         if (cancelled) return;
         setAuthSession(backendSession);
         if (backendSession.authenticated) {
-          const [profileResponse, liveSignals, queue] = await Promise.all([getLiveViewerProfile(), getLiveViewerSignals(), getQueue()]);
+          const [profileResponse, liveSignals, queue, draft, latest] = await Promise.all([
+            getLiveViewerProfile(), getLiveViewerSignals(), getQueue(), getSessionDraft("live"), getLatestRecommendationSession("live")
+          ]);
           const liveProfile = await migrateLocalProfile(localProfile, profileResponse.source);
           if (cancelled) return;
           setMode("live");
           setProfile(liveProfile);
-          applyProfileDefaults(liveProfile);
+          if (draft.request) applySessionRequest(draft.request); else applyProfileDefaults(liveProfile);
           setSignals(liveSignals);
           setLiveQueue(queue.items);
           setSaved(new Set(queue.items.map((item) => item.id)));
-          setSession({ mode: "live", sessionId: "initial", totalMinutes: 0, naturalEnd: true, items: [] });
+          if (latest.session) setSession(latest.session);
+          else setSession({
+            mode: "live", sessionId: "initial", chainId: "initial", totalMinutes: 0, naturalEnd: true,
+            request: draft.request ?? initialRequest, page: 1, hasMore: false, recommendationMode: "session", seenVideoIds: [], items: []
+          });
           if (oauthSuccess && liveProfile.status !== "completed") {
             setEditingProfile(false);
             setOnboardingOpen(true);
@@ -247,10 +291,11 @@ export function ViewerDashboard() {
             if (syncResult.status === "queued" || syncResult.status === "already_running") setSyncing(true);
           }
         } else {
+          const [draft, latest] = await Promise.all([getSessionDraft("demo"), getLatestRecommendationSession("demo")]);
           setProfile(localProfile);
-          applyProfileDefaults(localProfile);
+          if (draft.request) applySessionRequest(draft.request); else applyProfileDefaults(localProfile);
           setSignals(await getViewerSignals(false, localProfile));
-          setSession(createDemoSession({ ...initialRequest, source: localProfile.defaultSource, formats: localProfile.formats, languages: localProfile.languages, novelty: localProfile.novelty, depth: localProfile.depth, audioFriendly: localProfile.audioFriendly, antiClickbait: localProfile.antiClickbait }, localProfile));
+          setSession(latest.session ?? createDemoSession({ ...initialRequest, source: localProfile.defaultSource, formats: localProfile.formats, languages: localProfile.languages, novelty: localProfile.novelty, depth: localProfile.depth, audioFriendly: localProfile.audioFriendly, antiClickbait: localProfile.antiClickbait }, localProfile));
         }
         if (oauthError) setAppError("Google connection could not be completed. Try connecting again or continue with demo data.");
       } catch (error) {
@@ -260,11 +305,11 @@ export function ViewerDashboard() {
         setSignals(await getViewerSignals(false, localProfile));
         setAppError(error instanceof Error ? error.message : "Watchflow could not reach the live service.");
       } finally {
-        if (!cancelled) setLoadingApp(false);
+        if (!cancelled) { setLoadingApp(false); setHydrated(true); }
       }
     })();
     return () => { cancelled = true; };
-  }, [applyProfileDefaults]);
+  }, [applyProfileDefaults, applySessionRequest]);
 
   React.useEffect(() => {
     if (mode !== "live" || (!syncing && !["queued", "running"].includes(signals.sync?.status ?? ""))) return;
@@ -287,8 +332,19 @@ export function ViewerDashboard() {
   }, [toast]);
 
   const buildRequest = React.useCallback((sourceOverride?: SourceMode): RecommendationSessionRequest => ({
-    minutes, intent, source: sourceOverride ?? source, topics, formats, languages, novelty, depth, audioFriendly, antiClickbait
-  }), [antiClickbait, audioFriendly, depth, formats, intent, languages, minutes, novelty, source, topics]);
+    minutes, timeLimitEnabled, recommendationMode, intent, source: sourceOverride ?? source, topics, formats, languages, novelty, depth, audioFriendly, antiClickbait
+  }), [antiClickbait, audioFriendly, depth, formats, intent, languages, minutes, novelty, recommendationMode, source, timeLimitEnabled, topics]);
+
+  React.useEffect(() => {
+    if (!hydrated) return;
+    setSaveState("saving");
+    const timeout = window.setTimeout(() => {
+      void saveSessionDraft(buildRequest(), mode)
+        .then(() => setSaveState("saved"))
+        .catch(() => setSaveState("error"));
+    }, 500);
+    return () => window.clearTimeout(timeout);
+  }, [buildRequest, hydrated, mode]);
 
   async function generateSession(sourceOverride?: SourceMode) {
     setBuilding(true);
@@ -297,10 +353,26 @@ export function ViewerDashboard() {
     try {
       const response = await createRecommendationSession(buildRequest(sourceOverride), profile, mode);
       setSession(response);
-      setToast({ message: response.items.length ? "A fresh session is ready. It ends when the last card ends." : response.emptyReason === "quota_limited" ? "Today's discovery search limit has been reached. Subscription results remain available." : "No exact matches yet. Adjust a filter or broaden the source." });
+      saveLatestRecommendationSession(response);
+      setToast({ message: response.items.length ? response.recommendationMode === "single" ? "Five alternatives are ready." : "A fresh session is ready. It ends when the last card ends." : response.emptyReason === "quota_limited" ? "Today's discovery search limit has been reached. Subscription results remain available." : "No exact matches yet. Adjust a filter or broaden the source." });
       window.requestAnimationFrame(() => document.querySelector("#discover")?.scrollIntoView({ behavior: "smooth", block: "start" }));
     } catch (error) {
       setAppError(error instanceof Error ? error.message : "Recommendations could not be created.");
+    } finally {
+      setBuilding(false);
+    }
+  }
+
+  async function nextSet() {
+    setBuilding(true);
+    setAppError(null);
+    try {
+      const response = await createNextRecommendationSession(session, profile);
+      setSession(response);
+      saveLatestRecommendationSession(response);
+      setToast({ message: response.items.length ? `Set ${response.page} is ready with no repeats.` : "No more matches for these filters." });
+    } catch (error) {
+      setAppError(error instanceof Error ? error.message : "The next set could not be created.");
     } finally {
       setBuilding(false);
     }
@@ -362,11 +434,12 @@ export function ViewerDashboard() {
 
   function useDemoData() {
     void getViewerProfile().then(async (localProfile) => {
+      const [draft, latest] = await Promise.all([getSessionDraft("demo"), getLatestRecommendationSession("demo")]);
       setMode("demo");
       setProfile(localProfile);
-      applyProfileDefaults(localProfile);
+      if (draft.request) applySessionRequest(draft.request); else applyProfileDefaults(localProfile);
       setSignals(await getViewerSignals(false, localProfile));
-      setSession(createDemoSession(initialRequest, localProfile));
+      setSession(latest.session ?? createDemoSession(initialRequest, localProfile));
       setSaved(new Set(["city-history", "woodworking"]));
       setAppError(null);
       setToast({ message: "Demo mode is active. Live account data is kept separate." });
@@ -398,6 +471,8 @@ export function ViewerDashboard() {
   }
 
   const activeFilterLabels = [
+    recommendationMode === "session" ? "Watch session" : "Single video",
+    timeLimitEnabled ? `${minutes} min` : "No time limit",
     ...topics.map((topic) => interestOptions.find((item) => item.id === topic)?.label ?? topic),
     formats.length < 4 ? formats.map((format) => formatLabels[format]).join(" + ") : "All formats",
     languages.map((language) => languageLabels[language]).join(" + "),
@@ -405,6 +480,7 @@ export function ViewerDashboard() {
     antiClickbait ? "Anti-clickbait" : null
   ].filter(Boolean) as string[];
   const displayedQueue = mode === "live" ? liveQueue : queueItems;
+  const filtersChanged = JSON.stringify(session.request) !== JSON.stringify(buildRequest());
 
   if (loadingApp) {
     return <div className="viewer-loading" role="status"><span className="viewer-brand-mark"><Compass /></span><LoaderCircle className="spin" /><strong>Loading your Watchflow…</strong><p>Checking your secure session and recommendation profile.</p></div>;
@@ -425,10 +501,10 @@ export function ViewerDashboard() {
         {(profile.status === "skipped" || profile.status === "in_progress") && <aside className="profile-nudge"><Sparkles /><div><strong>Make these recommendations feel more like yours</strong><p>Your taste setup is {profile.status === "in_progress" ? "partly complete" : "using balanced defaults"}. Finish it in about a minute.</p></div><button className="button secondary" type="button" onClick={() => { setEditingProfile(false); setOnboardingOpen(true); }}>Finish setup</button></aside>}
 
         <section className="intent-panel" id="for-you">
-          <div className="intent-heading"><div><span className="section-kicker"><WandSparkles />Build a viewing session</span><h2>What do you want to watch right now?</h2><p>Set the moment. Your taste profile takes care of the rest.</p></div><span className={`demo-label ${mode === "live" ? "live" : ""}`}><span />{mode === "live" ? "Live YouTube data" : "Interactive demo"}</span></div>
+          <div className="intent-heading"><div><span className="section-kicker"><WandSparkles />Build a viewing session</span><h2>What do you want to watch right now?</h2><p>Set the moment. Your taste profile takes care of the rest.</p></div><div className="composer-status"><span className={`save-state ${saveState}`}><span />{saveState === "saving" ? "Saving…" : saveState === "error" ? "Couldn't save" : saveState === "saved" ? "Preferences saved" : "Ready"}</span><span className={`demo-label ${mode === "live" ? "live" : ""}`}><span />{mode === "live" ? "Live YouTube data" : "Interactive demo"}</span></div></div>
 
           <div className="composer-layout">
-            <fieldset className="control-group"><legend>How much time do you have?</legend><div className="time-options">{[15, 30, 45, 60].map((value) => <button key={value} className={minutes === value ? "selected" : ""} type="button" onClick={() => setMinutes(value)}><Clock3 />{value === 60 ? "60+ min" : `${value} min`}</button>)}</div></fieldset>
+            <fieldset className="control-group time-control"><legend>How should time shape the results?</legend><div className="time-control-header"><div className="mode-segment" role="group" aria-label="Recommendation mode"><button className={recommendationMode === "session" ? "selected" : ""} type="button" onClick={() => setRecommendationMode("session")}><ListVideo />Watch session</button><button className={recommendationMode === "single" ? "selected" : ""} type="button" onClick={() => setRecommendationMode("single")}><Play />Single video</button></div><label className="time-limit-toggle"><input type="checkbox" checked={timeLimitEnabled} onChange={(event) => setTimeLimitEnabled(event.target.checked)} /><i /><span><strong>Use time limit</strong><small>{timeLimitEnabled ? "Duration affects these picks" : "Show the strongest matches"}</small></span></label></div>{timeLimitEnabled && <div className="time-picker"><div className="time-options">{[15, 30, 45, 60].map((value) => <button key={value} className={minutes === value ? "selected" : ""} type="button" onClick={() => setMinutes(value)}><Clock3 />{value} min</button>)}</div><label className="custom-time"><span>Custom</span><input type="number" min="5" max="180" value={minutes} onChange={(event) => setMinutes(Math.min(180, Math.max(5, Number(event.target.value) || 5)))} /><small>min</small></label></div>}<p className="time-help">{recommendationMode === "session" ? timeLimitEnabled ? "Up to three videos whose combined length fits your time." : "Three strong recommendations without duration affecting the ranking." : timeLimitEnabled ? "Five alternatives close to this length, not a combined playlist." : "Five strong standalone alternatives of any length."}</p></fieldset>
             <fieldset className="control-group"><legend>What do you need?</legend><div className="intent-options expanded">{intentOptions.map((option) => <button key={option.value} className={intent === option.value ? "selected" : ""} type="button" onClick={() => setIntent(option.value)}><strong>{option.label}</strong><span>{option.note}</span></button>)}</div></fieldset>
             <fieldset className="control-group"><legend>Where should we look?</legend><div className="source-options">{sourceOptions.map((option) => { const Icon = option.icon; return <button key={option.value} className={source === option.value ? "selected" : ""} type="button" onClick={() => setSource(option.value)}><Icon /><span><strong>{option.label}</strong><small>{option.note}</small></span>{source === option.value && <Check />}</button>; })}</div></fieldset>
 
@@ -440,16 +516,16 @@ export function ViewerDashboard() {
               <div className="filter-columns"><label className="range-control"><span><b>Familiar</b><b>Surprise me</b></span><input type="range" min="0" max="100" value={novelty} onChange={(event) => setNovelty(Number(event.target.value))} /><small>{novelty < 40 ? "Mostly familiar" : novelty > 70 ? "More new territory" : "Balanced discovery"}</small></label><label className="range-control"><span><b>Quick overview</b><b>Deep dive</b></span><input type="range" min="0" max="100" value={depth} onChange={(event) => setDepth(Number(event.target.value))} /><small>{depth < 40 ? "Light and quick" : depth > 70 ? "Detailed and focused" : "Useful detail"}</small></label></div>
               <div className="filter-columns toggles"><label className="toggle-row"><span><Brain /><span><strong>Audio-friendly</strong><small>Works without watching closely</small></span></span><input type="checkbox" checked={audioFriendly} onChange={(event) => setAudioFriendly(event.target.checked)} /><i /></label><label className="toggle-row"><span><CheckCircle2 /><span><strong>Anti-clickbait filter</strong><small>Prefer accurate titles</small></span></span><input type="checkbox" checked={antiClickbait} onChange={(event) => setAntiClickbait(event.target.checked)} /><i /></label></div>
             </div>}
-            <button className="button primary build-button" type="button" onClick={() => void generateSession()} disabled={building || !formats.length || !languages.length}>{building ? <LoaderCircle className="spin" /> : <Sparkles />}{building ? "Building your session…" : "Build my session"}</button>
+            <button className="button primary build-button" type="button" onClick={() => void generateSession()} disabled={building || !formats.length || !languages.length}>{building ? <LoaderCircle className="spin" /> : <Sparkles />}{building ? "Finding the best matches…" : recommendationMode === "single" ? "Find video alternatives" : "Build my session"}</button>
           </div>
         </section>
 
         <section className="session-section" id="discover">
-          <div className="section-header"><div><span className="section-kicker">Made for this moment</span><h2>{session.items.length ? `Your ${session.totalMinutes}-minute session` : "No exact matches yet"}</h2><p>{session.items.length ? `${session.items.length} focused picks, ordered to flow naturally.` : "Your filters are working. Try a broader source or remove one filter."}</p></div>{session.items.length > 0 && <div className="session-stop"><Check /><span><strong>Natural stopping point</strong>No endless feed after video {session.items.length}</span></div>}</div>
-          {session.items.length ? <><div className="session-timeline" aria-label={`${session.items.length} video session lasting ${session.totalMinutes} minutes`}>{session.items.map((video, index) => <span key={video.id} style={{ flex: video.duration }}><i>{index + 1}</i>{video.duration} min</span>)}<b>Done</b></div><div className="recommendation-grid">{session.items.map((video) => <RecommendationCard key={video.id} video={video} live={mode === "live"} saved={saved.has(video.id)} onSave={() => void toggleSaved(video)} onPlay={() => void openVideo(video)} onReject={() => setFeedbackVideo(video)} />)}</div></> : <div className="recommendation-empty"><Search /><strong>{mode === "live" && !signals.lastSyncedAt ? "Sync YouTube before your first live session" : "Nothing fits every choice"}</strong><p>{mode === "live" && !signals.lastSyncedAt ? "Watchflow needs subscriptions and likes before it can rank real videos." : "We will never silently mix in a source you did not choose."}</p>{mode === "live" && !signals.lastSyncedAt ? <button className="button secondary" type="button" onClick={() => void syncNow()} disabled={syncing}><RefreshCcw />Start sync</button> : source !== "mixed" && <button className="button secondary" type="button" onClick={() => void generateSession("mixed")}><Users />Try Balanced instead</button>}</div>}
+          <div className="section-header"><div><span className="section-kicker">Made for this moment · Set {session.page}</span><h2>{session.items.length ? session.recommendationMode === "single" ? `${session.items.length} video alternatives` : `Your ${session.totalMinutes}-minute session` : session.page > 1 ? "No more matches" : "No exact matches yet"}</h2><p>{session.items.length ? session.recommendationMode === "single" ? "Choose one. Each card is a standalone option." : `${session.items.length} focused picks, ordered to flow naturally.` : "Change a filter or broaden the source to continue."}</p>{filtersChanged && session.items.length > 0 && <span className="results-outdated"><Clock3 />Filters changed after this set was generated</span>}</div>{session.items.length > 0 && session.naturalEnd && <div className="session-stop"><Check /><span><strong>Natural stopping point</strong>No endless feed after video {session.items.length}</span></div>}</div>
+          {session.items.length ? <>{session.recommendationMode === "session" && <div className="session-timeline" aria-label={`${session.items.length} video session lasting ${session.totalMinutes} minutes`}>{session.items.map((video, index) => <span key={video.id} style={{ flex: video.duration }}><i>{index + 1}</i>{video.duration} min</span>)}<b>Done</b></div>}<div className={`recommendation-grid ${session.recommendationMode === "single" ? "single-mode" : ""}`}>{session.items.map((video) => <RecommendationCard key={video.id} video={video} live={mode === "live"} saved={saved.has(video.id)} onSave={() => void toggleSaved(video)} onPlay={() => void openVideo(video)} onReject={() => setFeedbackVideo(video)} />)}</div><div className="session-actions"><button className="button secondary next-set" type="button" onClick={() => void nextSet()} disabled={building || !session.hasMore}>{building ? <LoaderCircle className="spin" /> : <RefreshCcw />}{building ? "Finding another set…" : session.hasMore ? "Next set" : "No more matches"}</button><small>Previously shown videos will not repeat.</small></div></> : <div className="recommendation-empty"><Search /><strong>{mode === "live" && !signals.lastSyncedAt ? "Sync YouTube before your first live session" : session.page > 1 ? "You reached the end of these matches" : "Nothing fits every choice"}</strong><p>{mode === "live" && !signals.lastSyncedAt ? "Watchflow needs subscriptions and likes before it can rank real videos." : "We will never silently mix in a source you did not choose."}</p><div className="empty-actions">{mode === "live" && !signals.lastSyncedAt ? <button className="button secondary" type="button" onClick={() => void syncNow()} disabled={syncing}><RefreshCcw />Start sync</button> : <button className="button secondary" type="button" onClick={() => document.querySelector("#for-you")?.scrollIntoView({ behavior: "smooth" })}><SlidersHorizontal />Change filters</button>}{source !== "mixed" && <button className="button secondary" type="button" onClick={() => void generateSession("mixed")}><Users />Try Balanced instead</button>}</div></div>}
         </section>
 
-        <div className="utility-grid"><section className="utility-panel queue-panel" id="queue"><div className="section-header compact-header"><div><span className="section-kicker">Saved-video rescue</span><h2>Worth another look</h2><p>{mode === "live" ? "Your saved recommendations stay here between visits." : "Demo examples of videos that have been waiting too long."}</p></div>{displayedQueue.length > 0 && <button className="button secondary" type="button" onClick={() => void openVideo(displayedQueue[Math.floor(Math.random() * displayedQueue.length)] as ScoredRecommendation)}><Sparkles />Pick one</button>}</div>{displayedQueue.length ? <div className="queue-list">{displayedQueue.map((video, index) => <article key={video.id}><img src={video.image} alt="" /><div><span>{mode === "live" ? "Saved recommendation" : index === 0 ? "Saved 3 weeks ago" : index === 1 ? "Saved 1 month ago" : "Saved 6 weeks ago"}</span><h3>{video.title}</h3><p>{video.channel} · {video.duration} min</p></div><button className="icon-button" type="button" onClick={() => void openVideo(video as ScoredRecommendation)} aria-label={`Open ${video.title}`}><ChevronRight /></button></article>)}</div> : <div className="compact-empty"><Bookmark /><strong>Your queue is empty</strong><p>Save a recommendation and it will remain available here.</p></div>}</section>
+        <div className="utility-grid"><section className="utility-panel queue-panel" id="queue"><div className="section-header compact-header"><div><span className="section-kicker">Saved-video rescue</span><h2>Worth another look</h2><p>{mode === "live" ? "Your saved recommendations stay here between visits." : "Demo examples of videos that have been waiting too long."}</p></div>{displayedQueue.length > 0 && <button className="button secondary" type="button" onClick={() => void openVideo(displayedQueue[Math.floor(Math.random() * displayedQueue.length)] as ScoredRecommendation)}><Sparkles />Pick one</button>}</div>{displayedQueue.length ? <div className="queue-list">{displayedQueue.map((video, index) => <article key={video.id}><SafeImage src={video.image} alt="" /><div><span>{mode === "live" ? "Saved recommendation" : index === 0 ? "Saved 3 weeks ago" : index === 1 ? "Saved 1 month ago" : "Saved 6 weeks ago"}</span><h3>{video.title}</h3><p>{video.channel} · {video.duration} min</p></div><button className="icon-button" type="button" onClick={() => void openVideo(video as ScoredRecommendation)} aria-label={`Open ${video.title}`}><ChevronRight /></button></article>)}</div> : <div className="compact-empty"><Bookmark /><strong>Your queue is empty</strong><p>Save a recommendation and it will remain available here.</p></div>}</section>
           <section className="utility-panel path-panel" id="paths">{mode === "live" ? <div className="feature-unavailable"><Route /><span className="section-kicker">Learning paths</span><h2>Coming after your first sessions</h2><p>Live learning paths are not generated yet. Watchflow will never present demo progress as yours.</p></div> : <><div className="section-header compact-header"><div><span className="section-kicker">Continue learning</span><h2>Understanding the night sky</h2><p>1 of 4 demo steps completed</p></div><span className="path-progress">25%</span></div><div className="path-steps"><div className="complete"><span><Check /></span><div><strong>How to read the night sky</strong><small>Completed · 12 min</small></div></div><div className="current"><span>2</span><div><strong>Why Saturn has rings</strong><small>Up next · 18 min</small></div><Play /></div><div><span>3</span><div><strong>Finding planets from home</strong><small>15 min</small></div></div><div><span>4</span><div><strong>Your first telescope</strong><small>21 min</small></div></div></div></>}</section></div>
 
         <div className="utility-grid bottom-grid" id="taste"><section className="utility-panel taste-panel profile-summary"><div className="section-header compact-header"><div><span className="section-kicker">Editable taste profile</span><h2>What Watchflow understands</h2><p>{profile.status === "completed" ? `Your ${mode === "live" ? "saved" : "local"} defaults guide every new session.` : "Balanced defaults are active until setup is complete."}</p></div><Brain /></div><div className="profile-summary-grid"><div><span>Interests</span><p>{profile.interests.map((interest) => interestOptions.find((item) => item.id === interest)?.label ?? interest).join(", ") || "Not set"}</p></div><div><span>Languages</span><p>{profile.languages.map((language) => languageLabels[language]).join(", ")}</p></div><div><span>Default source</span><p>{sourceOptions.find((option) => option.value === profile.defaultSource)?.label}</p></div><div><span>YouTube signals</span><p>{profile.useSubscriptions && profile.useLikedVideos ? "Subscriptions + likes" : profile.useSubscriptions ? "Subscriptions" : profile.useLikedVideos ? "Liked videos" : "Explicit profile only"}</p></div></div><button className="button secondary edit-profile" type="button" onClick={() => { setEditingProfile(true); setOnboardingOpen(true); }}><SlidersHorizontal />Edit taste profile</button>{mode === "live" && <div className="account-actions"><button type="button" onClick={() => { if (window.confirm("Disconnect YouTube and remove imported YouTube data? Your taste profile will remain.")) void disconnectYoutube().then(() => window.location.reload()); }}>Disconnect YouTube</button><button className="danger" type="button" onClick={() => { if (window.confirm("Permanently delete your Watchflow account and all stored data?")) void deleteViewerAccount().then(() => window.location.reload()); }}>Delete account</button></div>}</section>

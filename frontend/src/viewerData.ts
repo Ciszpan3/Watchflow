@@ -109,7 +109,11 @@ function scoreVideo(video: Recommendation, request: RecommendationSessionRequest
   const intentScore = video.intents.includes(request.intent) ? 30 : 0;
   const topicScore = topicMatches.length ? 25 : 0;
   const affinityScore = profile.useLikedVideos ? video.likedAffinity * 0.2 : 10;
-  const durationScore = Math.max(0, 15 - Math.max(0, video.duration - request.minutes) * 2);
+  const tolerance = Math.max(5, Math.ceil(request.minutes * 0.2));
+  const distance = Math.abs(video.duration - request.minutes);
+  const durationScore = !request.timeLimitEnabled ? 0 : request.recommendationMode === "single"
+    ? distance <= tolerance ? 15 - (distance / tolerance) * 5 : Math.max(0, 10 - (distance - tolerance))
+    : Math.max(0, 15 - Math.max(0, video.duration - request.minutes) * 2);
   const alignment = 1 - ((Math.abs(video.novelty - request.novelty) + Math.abs(video.depth - request.depth)) / 200);
   const preferenceScore = Math.max(0, alignment * 10);
   return {
@@ -149,10 +153,14 @@ function enrich(video: Recommendation, request: RecommendationSessionRequest, pr
 export function createDemoSession(
   request: RecommendationSessionRequest,
   profile: ViewerProfile,
-  videos = recommendations
+  videos = recommendations,
+  excludedVideoIds: string[] = [],
+  page = 1,
+  chainId = `demo-chain-${Date.now()}`
 ): RecommendationSessionResponse {
   const excluded = [...profile.excludedTopics];
-  const sourceCandidates = videos.filter((video) => sourceAllowed(video, request.source));
+  const excludedIds = new Set(excludedVideoIds);
+  const sourceCandidates = videos.filter((video) => sourceAllowed(video, request.source) && !excludedIds.has(video.id));
   const filtered = sourceCandidates.filter((video) => {
     const matchesTopic = request.topics.length === 0 || overlap(video.topics, request.topics).length > 0;
     const allowedTopic = overlap(video.topics, excluded).length === 0;
@@ -164,21 +172,26 @@ export function createDemoSession(
 
   if (!filtered.length) {
     return {
-      mode: "demo", sessionId: `demo-${Date.now()}`, totalMinutes: 0, naturalEnd: true, items: [],
+      mode: "demo", sessionId: `demo-${Date.now()}`, chainId, totalMinutes: 0,
+      naturalEnd: request.recommendationMode === "session", request, page, hasMore: false,
+      recommendationMode: request.recommendationMode, seenVideoIds: excludedVideoIds, items: [],
       emptyReason: sourceCandidates.length ? "no_filter_matches" : "no_source_matches"
     };
   }
 
   const ranked = filtered
     .map((video) => enrich(video, request, profile))
-    .sort((left, right) => right.match - left.match);
+    .sort((left, right) => request.recommendationMode === "single" && request.timeLimitEnabled
+      ? Math.abs(left.duration - request.minutes) - Math.abs(right.duration - request.minutes) || right.match - left.match
+      : right.match - left.match);
   const pools = {
     subscribed: ranked.filter((video) => video.source === "subscribed"),
     new: ranked.filter((video) => video.source === "new")
   };
+  const count = request.recommendationMode === "single" ? 5 : 3;
   const preferredSources: Array<"subscribed" | "new"> = request.source === "mixed"
-    ? ["subscribed", "new", "subscribed"]
-    : [request.source, request.source, request.source];
+    ? Array.from({ length: count }, (_, index) => index % 2 === 0 ? "subscribed" : "new")
+    : Array.from({ length: count }, () => request.source as "subscribed" | "new");
 
   const selected: ScoredRecommendation[] = [];
   let totalMinutes = 0;
@@ -188,7 +201,8 @@ export function createDemoSession(
       ? diversify(pools[preferredSource === "subscribed" ? "new" : "subscribed"], selected)
       : [];
     const next = [...desiredPool, ...fallbackPool].find((video) =>
-      !selected.some((item) => item.id === video.id) && totalMinutes + video.duration <= request.minutes
+      !selected.some((item) => item.id === video.id)
+      && (request.recommendationMode === "single" || !request.timeLimitEnabled || totalMinutes + video.duration <= request.minutes)
     );
     if (!next) continue;
     selected.push(next);
@@ -198,8 +212,14 @@ export function createDemoSession(
   return {
     mode: "demo",
     sessionId: `demo-${Date.now()}`,
+    chainId,
     totalMinutes,
-    naturalEnd: true,
+    naturalEnd: request.recommendationMode === "session",
+    request,
+    page,
+    hasMore: ranked.some((video) => !selected.some((item) => item.id === video.id)),
+    recommendationMode: request.recommendationMode,
+    seenVideoIds: [...excludedVideoIds, ...selected.map((item) => item.id)],
     items: selected,
     emptyReason: selected.length ? undefined : "no_filter_matches"
   };

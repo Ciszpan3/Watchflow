@@ -3,18 +3,41 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   VIEWER_PROFILE_KEY,
   VIEWER_PROFILE_MIGRATED_KEY,
+  VIEWER_LAST_SESSION_KEY,
+  VIEWER_SESSION_DRAFT_KEY,
   ViewerApiError,
   defaultViewerProfile,
   getAuthSession,
   getLiveViewerSignals,
+  getLatestRecommendationSession,
   getQueue,
   getViewerProfile,
   getViewerSignals,
+  getSessionDraft,
   migrateLocalProfile,
   saveToQueue,
+  saveLatestRecommendationSession,
+  saveSessionDraft,
   saveViewerProfile,
   sendFeedback
 } from "./viewerApi";
+import { createDemoSession } from "./viewerData";
+import type { RecommendationSessionRequest } from "./viewerTypes";
+
+const request: RecommendationSessionRequest = {
+  minutes: 30,
+  timeLimitEnabled: false,
+  recommendationMode: "single",
+  intent: "relax",
+  source: "mixed",
+  topics: [],
+  formats: ["standard"],
+  languages: ["en"],
+  novelty: 50,
+  depth: 50,
+  audioFriendly: false,
+  antiClickbait: true
+};
 
 describe("viewer profile adapter", () => {
   beforeEach(() => window.localStorage.clear());
@@ -34,6 +57,17 @@ describe("viewer profile adapter", () => {
   it("falls back safely when stored data is invalid", async () => {
     window.localStorage.setItem(VIEWER_PROFILE_KEY, "not-json");
     await expect(getViewerProfile()).resolves.toEqual(defaultViewerProfile);
+  });
+
+  it("persists the demo session draft and latest results", async () => {
+    await saveSessionDraft(request, "demo");
+    const session = createDemoSession(request, defaultViewerProfile);
+    saveLatestRecommendationSession(session);
+
+    await expect(getSessionDraft("demo")).resolves.toMatchObject({ request });
+    await expect(getLatestRecommendationSession("demo")).resolves.toMatchObject({ session: { sessionId: session.sessionId, request } });
+    expect(window.localStorage.getItem(VIEWER_SESSION_DRAFT_KEY)).toBeTruthy();
+    expect(window.localStorage.getItem(VIEWER_LAST_SESSION_KEY)).toBeTruthy();
   });
 
   it("keeps demo signals local without inventing imported counts", async () => {

@@ -1,6 +1,6 @@
 # Watchflow
 
-Watchflow pomaga zwykłym użytkownikom YouTube znaleźć kilka filmów dopasowanych do dostępnego czasu, bieżącej intencji i własnego gustu. Zamiast nieskończonego feedu aplikacja buduje maksymalnie trzyczęściową, wyjaśnialną sesję z naturalnym punktem zakończenia.
+Watchflow pomaga zwykłym użytkownikom YouTube znaleźć filmy dopasowane do dostępnego czasu, bieżącej intencji i własnego gustu. Zamiast nieskończonego feedu aplikacja buduje krótką, wyjaśnialną sesję albo proponuje pięć alternatywnych filmów do obejrzenia.
 
 Projekt jest pełnostackową aplikacją portfolio: łączy bezpieczne Google OAuth, YouTube Data API, PostgreSQL, kontrolę limitów API oraz deterministyczny ranking, którego wynik użytkownik może zrozumieć i korygować.
 
@@ -11,8 +11,11 @@ Projekt jest pełnostackową aplikacją portfolio: łączy bezpieczne Google OAu
 - trwały profil zainteresowań i onboarding w PostgreSQL;
 - synchronizacja subskrypcji, maksymalnie 200 polubień oraz ostatnich filmów z wybranych subskrybowanych kanałów;
 - wyszukiwanie nowych twórców z 12-godzinnym cache i dziennym limitem bezpieczeństwa;
-- maksymalnie trzy prawdziwe rekomendacje z informacją, dlaczego pasują;
-- wymagane filtry języka i formatu, limit czasu oraz wybór źródła;
+- dwa tryby rekomendacji: sesja do trzech filmów mieszcząca się w łącznym limicie albo pięć alternatyw pojedynczego filmu;
+- opcjonalny limit czasu od 5 do 180 minut, wymagane filtry języka i formatu oraz wybór źródła;
+- kolejne zestawy bez powtarzania wcześniej pokazanych, obejrzanych lub odrzuconych materiałów;
+- trwały szkic filtrów i ostatni zestaw, synchronizowane przez PostgreSQL po zalogowaniu oraz `localStorage` w demo;
+- bezpiecznie cache'owany avatar Google i kontrolowane zastępniki brakujących obrazów;
 - trwała kolejka, rejestrowanie otwarć i feedback wpływający na kolejne wyniki;
 - rozłączenie YouTube, wylogowanie i trwałe usunięcie konta;
 - osobny tryb demo bez logowania, który nigdy nie miesza się z wynikami live.

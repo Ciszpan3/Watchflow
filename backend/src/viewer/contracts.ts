@@ -3,6 +3,7 @@ export const sources = ["subscribed", "mixed", "new"] as const;
 export const formats = ["standard", "short", "live", "podcast"] as const;
 export const languages = ["en", "pl"] as const;
 export const intents = ["learn", "relax", "inspire", "company", "solve", "entertain"] as const;
+export const recommendationModes = ["session", "single"] as const;
 
 export type ViewerProfileInput = {
   version: 1;
@@ -24,6 +25,8 @@ export type ViewerProfileInput = {
 
 export type RecommendationRequest = {
   minutes: number;
+  timeLimitEnabled: boolean;
+  recommendationMode: typeof recommendationModes[number];
   intent: typeof intents[number];
   source: typeof sources[number];
   topics: string[];
@@ -74,6 +77,8 @@ export function isRecommendationRequest(value: unknown): value is Recommendation
   if (!value || typeof value !== "object") return false;
   const request = value as Partial<RecommendationRequest>;
   return Number.isInteger(request.minutes) && Number(request.minutes) >= 5 && Number(request.minutes) <= 180
+    && typeof request.timeLimitEnabled === "boolean"
+    && recommendationModes.includes(request.recommendationMode as never)
     && intents.includes(request.intent as never)
     && sources.includes(request.source as never)
     && Array.isArray(request.topics)

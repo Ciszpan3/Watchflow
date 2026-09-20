@@ -1,9 +1,9 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { env } from "../config/env.js";
 import { db } from "../db.js";
 import { VideoSource } from "../generated/prisma/enums.js";
-import type { Video, Channel } from "../generated/prisma/client.js";
-import type { RecommendationRequest, ViewerProfileInput } from "../viewer/contracts.js";
+import type { Video, Channel, Prisma } from "../generated/prisma/client.js";
+import { isRecommendationRequest, type RecommendationRequest, type ViewerProfileInput } from "../viewer/contracts.js";
 import { serializeProfile } from "../viewer/profile.js";
 import { upsertVideo, videoDetails, youtubeForUser } from "./youtubeLive.js";
 
@@ -130,7 +130,116 @@ export function serializeVideo(video: Video & { channel: Channel }, source: "sub
   };
 }
 
-export async function buildLiveSession(userId: string, request: RecommendationRequest) {
+type BuildSessionOptions = {
+  chainId?: string;
+  page?: number;
+  excludedVideoIds?: Iterable<string>;
+};
+
+type ScoredCandidate = {
+  candidate: Candidate;
+  match: number;
+  reason: string;
+  signals: string[];
+  durationMinutes: number;
+};
+
+function normalizeStoredRequest(value: Prisma.JsonValue): RecommendationRequest | null {
+  if (isRecommendationRequest(value)) return value;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const legacy = { ...value, timeLimitEnabled: true, recommendationMode: "session" };
+  return isRecommendationRequest(legacy) ? legacy : null;
+}
+
+function sourceOrder(request: RecommendationRequest) {
+  const count = request.recommendationMode === "single" ? 5 : 3;
+  if (request.source !== "mixed") return Array.from({ length: count }, () => request.source as "subscribed" | "new");
+  return Array.from({ length: count }, (_, index) => index % 2 === 0 ? "subscribed" as const : "new" as const);
+}
+
+function durationFit(duration: number, request: RecommendationRequest) {
+  if (!request.timeLimitEnabled) return 0;
+  if (request.recommendationMode === "single") {
+    const tolerance = Math.max(5, Math.ceil(request.minutes * 0.2));
+    const distance = Math.abs(duration - request.minutes);
+    return distance <= tolerance ? 15 - (distance / tolerance) * 5 : Math.max(0, 10 - (distance - tolerance));
+  }
+  return Math.max(0, 15 - Math.max(0, duration - request.minutes) * 2);
+}
+
+function selectCandidates(scored: ScoredCandidate[], request: RecommendationRequest) {
+  const pools = {
+    subscribed: scored.filter((item) => item.candidate.source === VideoSource.SUBSCRIBED),
+    new: scored.filter((item) => item.candidate.source === VideoSource.NEW)
+  };
+  const selected: ScoredCandidate[] = [];
+  let totalMinutes = 0;
+
+  for (const desiredSource of sourceOrder(request)) {
+    const sourcePool = pools[desiredSource];
+    const fallback = request.source === "mixed" ? pools[desiredSource === "new" ? "subscribed" : "new"] : [];
+    const options = [...sourcePool, ...fallback].sort((left, right) => {
+      const penalty = (item: ScoredCandidate) => selected.reduce((sum, picked) => sum
+        + (item.candidate.video.channelId === picked.candidate.video.channelId ? 18 : 0)
+        + (overlap(item.candidate.video.topics, picked.candidate.video.topics).length ? 8 : 0), 0);
+      const singleDistance = (item: ScoredCandidate) => request.recommendationMode === "single" && request.timeLimitEnabled
+        ? Math.abs(item.durationMinutes - request.minutes)
+        : 0;
+      return (singleDistance(left) - singleDistance(right)) || ((right.match - penalty(right)) - (left.match - penalty(left)));
+    });
+    const next = options.find((item) => {
+      if (selected.some((picked) => picked.candidate.video.id === item.candidate.video.id)) return false;
+      return request.recommendationMode === "single"
+        || !request.timeLimitEnabled
+        || totalMinutes + item.durationMinutes <= request.minutes;
+    });
+    if (!next) continue;
+    selected.push(next);
+    totalMinutes += next.durationMinutes;
+  }
+  return selected;
+}
+
+function sessionResponse(session: {
+  id: string;
+  chainId: string;
+  page: number;
+  request: Prisma.JsonValue;
+  totalMinutes: number;
+  items: Array<{
+    score: number;
+    source: VideoSource;
+    reason: string;
+    signals: string[];
+    video: Video & { channel: Channel };
+  }>;
+}, hasMore: boolean, quotaLimited = false, emptyReason?: "quota_limited" | "no_filter_matches" | "no_source_matches", seenVideoIds?: string[]) {
+  const request = normalizeStoredRequest(session.request);
+  if (!request) throw new Error("Stored recommendation request is invalid.");
+  return {
+    mode: "live" as const,
+    sessionId: session.id,
+    chainId: session.chainId,
+    totalMinutes: session.totalMinutes,
+    naturalEnd: request.recommendationMode === "session",
+    request,
+    page: session.page,
+    hasMore,
+    recommendationMode: request.recommendationMode,
+    seenVideoIds: seenVideoIds ?? session.items.map((item) => item.video.id),
+    items: session.items.map((item) => serializeVideo(
+      item.video,
+      item.source === VideoSource.SUBSCRIBED ? "subscribed" : "new",
+      item.score,
+      item.reason,
+      item.signals
+    )),
+    emptyReason,
+    quotaLimited
+  };
+}
+
+export async function buildLiveSession(userId: string, request: RecommendationRequest, options: BuildSessionOptions = {}) {
   const storedProfile = await db.viewerProfile.findUniqueOrThrow({ where: { userId } });
   const profile = serializeProfile(storedProfile);
   let quotaLimited = false;
@@ -149,7 +258,10 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
   const likedChannels = new Set(likedRows.map((row) => row.video.channelId));
   const openedTopics = activityRows.filter((row) => row.type === "OPENED").flatMap((row) => row.video.topics);
   const savedTopics = savedRows.flatMap((row) => row.video.topics);
-  const excludedVideoIds = new Set(feedbackRows.filter((row) => row.reason === "ALREADY_WATCHED").map((row) => row.videoId));
+  const excludedVideoIds = new Set([
+    ...feedbackRows.map((row) => row.videoId),
+    ...(options.excludedVideoIds ?? [])
+  ]);
   const dislikedTopics = feedbackRows.filter((row) => row.reason === "NOT_INTERESTED").flatMap((row) => row.video.topics);
   const repeatedChannels = new Set(feedbackRows.filter((row) => row.reason === "TOO_OFTEN").map((row) => row.video.channelId));
   const tooLongUntil = Date.now() - 14 * 86_400_000;
@@ -174,7 +286,7 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
       + overlap(video.topics, savedTopics).length * 6;
     const affinityScore = profile.useLikedVideos ? Math.min(20, affinityRaw / 5) : 10;
     const durationMinutes = Math.max(1, Math.ceil(video.durationSeconds / 60));
-    const durationScore = Math.max(0, 15 - Math.max(0, durationMinutes - request.minutes) * 2);
+    const durationScore = durationFit(durationMinutes, request);
     const novelty = source === "new" ? 85 : 35;
     const depth = Math.min(100, Math.round(video.durationSeconds / 18));
     const alignment = 1 - ((Math.abs(novelty - request.novelty) + Math.abs(depth - request.depth)) / 200);
@@ -191,34 +303,19 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
     return [{ candidate, match, reason, signals: [sourceSignal, affinitySignal, topicSignal], durationMinutes }];
   }).sort((left, right) => right.match - left.match);
 
-  const pools = {
-    subscribed: scored.filter((item) => item.candidate.source === VideoSource.SUBSCRIBED),
-    new: scored.filter((item) => item.candidate.source === VideoSource.NEW)
-  };
-  const order: Array<"subscribed" | "new"> = request.source === "mixed"
-    ? ["subscribed", "new", "subscribed"]
-    : [request.source, request.source, request.source];
-  const selected: typeof scored = [];
-  let totalMinutes = 0;
-  for (const desiredSource of order) {
-    const sourcePool = pools[desiredSource];
-    const fallback = request.source === "mixed" ? pools[desiredSource === "new" ? "subscribed" : "new"] : [];
-    const options = [...sourcePool, ...fallback].sort((left, right) => {
-      const penalty = (item: typeof left) => selected.reduce((sum, picked) => sum
-        + (item.candidate.video.channelId === picked.candidate.video.channelId ? 18 : 0)
-        + (overlap(item.candidate.video.topics, picked.candidate.video.topics).length ? 8 : 0), 0);
-      return (right.match - penalty(right)) - (left.match - penalty(left));
-    });
-    const next = options.find((item) => !selected.some((picked) => picked.candidate.video.id === item.candidate.video.id) && totalMinutes + item.durationMinutes <= request.minutes);
-    if (!next) continue;
-    selected.push(next);
-    totalMinutes += next.durationMinutes;
-  }
+  const selected = selectCandidates(scored, request);
+  const totalMinutes = selected.reduce((sum, item) => sum + item.durationMinutes, 0);
+  const hasMore = scored.some((item) => !selected.some((picked) => picked.candidate.video.id === item.candidate.video.id));
+  const chainId = options.chainId ?? randomUUID();
+  const page = options.page ?? 1;
 
   const session = await db.recommendationSession.create({
     data: {
       userId,
-      request,
+      chainId,
+      page,
+      hasMore,
+      request: request as Prisma.InputJsonValue,
       totalMinutes,
       items: {
         create: selected.map((item, position) => ({
@@ -233,19 +330,48 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
     }
   });
 
-  return {
-    mode: "live" as const,
-    sessionId: session.id,
-    totalMinutes,
-    naturalEnd: true as const,
-    items: selected.map((item) => serializeVideo(
-      item.candidate.video,
-      item.candidate.source === VideoSource.SUBSCRIBED ? "subscribed" : "new",
-      item.match,
-      item.reason,
-      item.signals
-    )),
-    emptyReason: selected.length ? undefined : quotaLimited ? "quota_limited" : candidates.length ? "no_filter_matches" : "no_source_matches",
-    quotaLimited
-  };
+  return sessionResponse({
+    ...session,
+    items: selected.map((item) => ({
+      score: item.match,
+      source: item.candidate.source,
+      reason: item.reason,
+      signals: item.signals,
+      video: item.candidate.video
+    }))
+  }, hasMore, quotaLimited,
+  selected.length ? undefined : quotaLimited ? "quota_limited" : candidates.length ? "no_filter_matches" : "no_source_matches");
+}
+
+export async function getLatestLiveSession(userId: string) {
+  const latest = await db.recommendationSession.findFirst({
+    where: { userId },
+    orderBy: { createdAt: "desc" },
+    include: { items: { orderBy: { position: "asc" }, include: { video: { include: { channel: true } } } } }
+  });
+  if (!latest) return null;
+  const seen = await db.recommendationItem.findMany({
+    where: { session: { userId, chainId: latest.chainId } },
+    select: { videoId: true }
+  });
+  return sessionResponse(latest, latest.hasMore, false, undefined, seen.map((item) => item.videoId));
+}
+
+export async function buildNextLiveSession(userId: string, sessionId: string) {
+  const previous = await db.recommendationSession.findFirst({ where: { id: sessionId, userId } });
+  const request = previous ? normalizeStoredRequest(previous.request) : null;
+  if (!previous || !request) {
+    const error = new Error("Recommendation session was not found.") as Error & { code: string };
+    error.code = "session_not_found";
+    throw error;
+  }
+  const seen = await db.recommendationItem.findMany({
+    where: { session: { userId, chainId: previous.chainId } },
+    select: { videoId: true }
+  });
+  return buildLiveSession(userId, request, {
+    chainId: previous.chainId,
+    page: previous.page + 1,
+    excludedVideoIds: seen.map((item) => item.videoId)
+  });
 }

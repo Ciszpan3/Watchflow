@@ -13,6 +13,8 @@ describe("viewer API contracts", () => {
   it("requires finite recommendation sessions with explicit formats and languages", () => {
     const request = {
       minutes: 45,
+      timeLimitEnabled: true,
+      recommendationMode: "session",
       intent: "learn",
       source: "mixed",
       topics: ["science"],
@@ -25,6 +27,9 @@ describe("viewer API contracts", () => {
     };
     expect(isRecommendationRequest(request)).toBe(true);
     expect(isRecommendationRequest({ ...request, minutes: 240 })).toBe(false);
+    expect(isRecommendationRequest({ ...request, minutes: 4 })).toBe(false);
+    expect(isRecommendationRequest({ ...request, timeLimitEnabled: false })).toBe(true);
+    expect(isRecommendationRequest({ ...request, recommendationMode: "feed" })).toBe(false);
     expect(isRecommendationRequest({ ...request, formats: [] })).toBe(false);
   });
 });

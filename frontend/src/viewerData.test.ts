@@ -5,6 +5,8 @@ import type { Recommendation, RecommendationSessionRequest } from "./viewerTypes
 
 const request: RecommendationSessionRequest = {
   minutes: 45,
+  timeLimitEnabled: true,
+  recommendationMode: "session",
   intent: "learn",
   source: "mixed",
   topics: [],
@@ -53,5 +55,25 @@ describe("viewer recommendation sessions", () => {
     const high: Recommendation = { ...recommendations[0], id: "high", channel: "High affinity", likedAffinity: 100, source: "subscribed" };
     const result = createDemoSession({ ...request, source: "subscribed", minutes: 15 }, defaultViewerProfile, [low, high]);
     expect(result.items[0].id).toBe("high");
+  });
+
+  it("returns five standalone alternatives and keeps the mixed source ratio", () => {
+    const result = createDemoSession({ ...request, recommendationMode: "single", minutes: 15 }, defaultViewerProfile);
+    expect(result.items).toHaveLength(5);
+    expect(result.items.map((video) => video.source)).toEqual(["subscribed", "new", "subscribed", "new", "subscribed"]);
+    expect(result.naturalEnd).toBe(false);
+  });
+
+  it("does not use duration as a filter when the time limit is disabled", () => {
+    const long = { ...recommendations[0], id: "long", duration: 120 };
+    const result = createDemoSession({ ...request, source: "subscribed", minutes: 5, timeLimitEnabled: false }, defaultViewerProfile, [long]);
+    expect(result.items.map((video) => video.id)).toEqual(["long"]);
+  });
+
+  it("does not repeat videos between consecutive sets", () => {
+    const first = createDemoSession({ ...request, recommendationMode: "single", timeLimitEnabled: false }, defaultViewerProfile);
+    const next = createDemoSession(first.request, defaultViewerProfile, recommendations, first.seenVideoIds, 2, first.chainId);
+    expect(next.items.some((video) => first.seenVideoIds.includes(video.id))).toBe(false);
+    expect(next.page).toBe(2);
   });
 });

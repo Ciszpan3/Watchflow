@@ -41,6 +41,17 @@ databaseTest("PostgreSQL repositories", () => {
     await db.video.create({
       data: { id: videoId, channelId, title: "Test video", durationSeconds: 120, tags: [], format: "short", topics: ["technology"], intents: ["learn"] }
     });
+    const draftRequest = {
+      minutes: 30, timeLimitEnabled: false, recommendationMode: "single", intent: "relax", source: "mixed",
+      topics: [], formats: ["standard"], languages: ["en"], novelty: 50, depth: 50, audioFriendly: false, antiClickbait: true
+    };
+    await db.viewerSessionDraft.create({ data: { userId, request: draftRequest } });
+    await expect(db.viewerSessionDraft.findUniqueOrThrow({ where: { userId } })).resolves.toMatchObject({ request: draftRequest });
+    const recommendationSession = await db.recommendationSession.create({
+      data: { userId, chainId: `chain-${suffix}`, page: 1, request: draftRequest, totalMinutes: 2,
+        items: { create: { videoId, position: 0, score: 80, source: "SUBSCRIBED", reason: "Test", signals: ["Test"] } } }
+    });
+    await expect(db.recommendationSession.findFirst({ where: { id: recommendationSession.id, userId: "another-user" } })).resolves.toBeNull();
     await db.savedVideo.create({ data: { userId, videoId } });
     await expect(db.savedVideo.create({ data: { userId, videoId } })).rejects.toMatchObject({ code: "P2002" });
     await db.syncJob.create({ data: { userId, activeKey: userId } });

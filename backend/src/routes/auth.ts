@@ -6,6 +6,7 @@ import { createAuthUrl, createOAuthClient, preserveRefreshToken } from "../servi
 import { encryptSecret, randomToken, tokensEqual } from "../services/security.js";
 import { createSession, deleteSession, sessionCookieOptions } from "../services/sessions.js";
 import { exchangeCodeForTokens } from "../services/youtube.js";
+import { loadAvatar } from "../services/avatar.js";
 import { profileCreateData, serializeProfile } from "../viewer/profile.js";
 
 export const authRouter = Router();
@@ -20,7 +21,7 @@ function sessionPayload(req: Request) {
       id: user.id,
       displayName: user.displayName,
       email: user.email,
-      avatarUrl: user.avatarUrl
+      avatarUrl: user.avatarUrl ? "/api/auth/avatar" : null
     },
     youtube: {
       connected: Boolean(user.googleAccount?.encryptedRefreshToken) && !user.googleAccount?.needsReconnect,
@@ -69,12 +70,15 @@ authRouter.get("/google/callback", async (req, res) => {
       throw new Error("Google account identity is incomplete or unverified");
     }
 
+    const existingUser = await db.user.findUnique({ where: { googleSubject: identity.sub }, select: { avatarUrl: true } });
+    const avatarChanged = existingUser?.avatarUrl !== (identity.picture ?? null);
     const user = await db.user.upsert({
       where: { googleSubject: identity.sub },
       update: {
         email: identity.email,
         displayName: identity.name ?? identity.email.split("@")[0],
-        avatarUrl: identity.picture ?? null
+        avatarUrl: identity.picture ?? null,
+        ...(avatarChanged ? { avatarData: null, avatarMimeType: null } : {})
       },
       create: {
         googleSubject: identity.sub,
@@ -119,6 +123,22 @@ authRouter.get("/google/callback", async (req, res) => {
 
 authRouter.get("/session", optionalAuth, (req, res) => {
   res.json(sessionPayload(req));
+});
+
+authRouter.get("/avatar", optionalAuth, requireAuth, async (req, res, next) => {
+  try {
+    const avatar = await loadAvatar((req as AuthenticatedRequest).authUser.id);
+    if (!avatar) {
+      res.status(404).json({ error: "avatar_unavailable", message: "Profile image is unavailable." });
+      return;
+    }
+    res.setHeader("Content-Type", avatar.mimeType);
+    res.setHeader("Cache-Control", "private, max-age=86400");
+    res.send(avatar.data);
+  } catch (error) {
+    console.warn("Avatar proxy failed", error);
+    res.status(404).json({ error: "avatar_unavailable", message: "Profile image is unavailable." });
+  }
 });
 
 authRouter.post("/logout", async (req, res, next) => {

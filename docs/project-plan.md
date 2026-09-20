@@ -2,7 +2,7 @@
 
 ## Cel produktu
 
-Watchflow pomaga widzowi świadomie wybrać film pasujący do czasu, intencji i zainteresowań. Wynikiem jest skończona sesja maksymalnie trzech materiałów, a nie kolejny nieskończony feed. Analityka twórców pozostaje opcjonalnym dodatkiem.
+Watchflow pomaga widzowi świadomie wybrać film pasujący do czasu, intencji i zainteresowań. Wynikiem jest skończona sesja maksymalnie trzech materiałów albo pięć alternatyw pojedynczego filmu, a nie kolejny nieskończony feed. Analityka twórców pozostaje opcjonalnym dodatkiem.
 
 ## Zrealizowany przepływ live
 
@@ -13,6 +13,8 @@ Watchflow pomaga widzowi świadomie wybrać film pasujący do czasu, intencji i 
 - Po logowaniu aplikacja importuje stary lokalny profil tylko raz, jeżeli profil serwerowy nie został jeszcze zmieniony.
 - Synchronizacja działa automatycznie po przekroczeniu sześciu godzin oraz ręcznie z 15-minutowym cooldownem.
 - Demo jest osobnym, jawnym trybem i nie jest używane jako ukryte uzupełnienie danych live.
+- Szkic filtrów oraz ostatni zestaw rekomendacji są przywracane po odświeżeniu. Konto live przechowuje je w PostgreSQL, a demo w wersjonowanych kluczach `localStorage`.
+- Avatar Google jest pobierany wyłącznie z zaufanego hosta HTTPS, ograniczony do 1 MB i cache'owany w bazie. Interfejs używa inicjałów, gdy obraz jest niedostępny.
 
 ## Sygnały i synchronizacja
 
@@ -31,20 +33,24 @@ Ranking jest deterministyczny:
 - intencja: 30%;
 - temat: 25%;
 - profil, polubienia i aktywność: 20%;
-- dopasowanie czasu: 15%;
+- dopasowanie czasu: 15%, gdy limit jest aktywny;
 - głębokość i odkrywanie: 10%.
 
-Język i format są filtrami wymaganymi. Wykluczone tematy oraz obejrzane filmy są usuwane. Powtarzające się kanały i tematy otrzymują karę różnorodności. W trybie mieszanym preferowany jest układ subskrypcja, nowy twórca, subskrypcja; tryby wyłączne nie rozszerzają samodzielnie źródła.
+Język i format są filtrami wymaganymi. Wykluczone tematy oraz obejrzane filmy są usuwane. Powtarzające się kanały i tematy otrzymują karę różnorodności. Przy wyłączonym limicie długość nie filtruje ani nie punktuje materiałów. Tryb sesji zwraca do trzech filmów, a tryb pojedynczego filmu pięć alternatyw preferujących długość w zakresie ±20% wskazanego czasu, co najmniej ±5 minut.
+
+W trybie mieszanym sesja preferuje układ subskrypcja, nowy twórca, subskrypcja, a pięć alternatyw kontynuuje ten wzorzec. Tryby wyłączne nie rozszerzają samodzielnie źródła. `Next set` zachowuje wspólny łańcuch i wyklucza wszystkie materiały pokazane na wcześniejszych stronach.
 
 Feedback zmienia kolejne wyniki: obejrzany materiał jest wykluczany, brak zainteresowania obniża tematy, „zbyt długi” czasowo obniża podobne długości, „zbyt częsty” obniża kanał, a zapisanie lub otwarcie wzmacnia temat i kanał.
 
 ## Endpointy
 
-- `GET /api/auth/session`, `POST /api/auth/logout`, `DELETE /api/auth/youtube`;
+- `GET /api/auth/session`, `GET /api/auth/avatar`, `POST /api/auth/logout`, `DELETE /api/auth/youtube`;
 - `DELETE /api/viewer/account`;
 - `GET /api/viewer/profile`, `PUT /api/viewer/profile`, `GET /api/viewer/signals`;
+- `GET /api/viewer/session-draft`, `PUT /api/viewer/session-draft`;
 - `POST /api/viewer/sync`;
-- `POST /api/recommendations/session`;
+- `POST /api/recommendations/session`, `GET /api/recommendations/session/latest`;
+- `POST /api/recommendations/session/:sessionId/next`;
 - `POST /api/recommendations/:videoId/feedback` i `POST /api/recommendations/:videoId/opened`;
 - `GET /api/queue`, `POST /api/queue`, `DELETE /api/queue/:videoId`.
 

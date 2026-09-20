@@ -3,6 +3,7 @@ export type SourceMode = "subscribed" | "mixed" | "new";
 export type VideoFormat = "standard" | "short" | "live" | "podcast";
 export type LanguageCode = "en" | "pl";
 export type OnboardingStatus = "not_started" | "in_progress" | "completed" | "skipped";
+export type RecommendationMode = "session" | "single";
 
 export type ViewerProfile = {
   version: 1;
@@ -96,6 +97,8 @@ export type ScoredRecommendation = Recommendation & {
 
 export type RecommendationSessionRequest = {
   minutes: number;
+  timeLimitEnabled: boolean;
+  recommendationMode: RecommendationMode;
   intent: WatchIntent;
   source: SourceMode;
   topics: string[];
@@ -110,8 +113,14 @@ export type RecommendationSessionRequest = {
 export type RecommendationSessionResponse = {
   mode: "demo" | "live";
   sessionId: string;
+  chainId: string;
   totalMinutes: number;
-  naturalEnd: true;
+  naturalEnd: boolean;
+  request: RecommendationSessionRequest;
+  page: number;
+  hasMore: boolean;
+  recommendationMode: RecommendationMode;
+  seenVideoIds: string[];
   items: ScoredRecommendation[];
   emptyReason?: "no_source_matches" | "no_filter_matches" | "quota_limited";
   quotaLimited?: boolean;
