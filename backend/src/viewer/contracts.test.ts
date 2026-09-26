@@ -15,6 +15,7 @@ describe("viewer API contracts", () => {
       minutes: 45,
       timeLimitEnabled: true,
       recommendationMode: "session",
+      resultCount: 3,
       intent: "learn",
       source: "mixed",
       topics: ["science"],

@@ -22,7 +22,7 @@ export const env = {
   youtubeRequestTimeoutMs: Number(process.env.YOUTUBE_REQUEST_TIMEOUT_MS ?? 15_000),
   searchCacheHours: Number(process.env.SEARCH_CACHE_HOURS ?? 12),
   searchDailyLimit: Number(process.env.SEARCH_DAILY_LIMIT ?? 80),
-  minimumNewCreatorViews: Number(process.env.MINIMUM_NEW_CREATOR_VIEWS ?? 1000)
+  minimumNewCreatorViews: Number(process.env.MINIMUM_NEW_CREATOR_VIEWS ?? 10_000)
 };
 
 export function hasGoogleOAuthConfig() {

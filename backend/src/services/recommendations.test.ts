@@ -48,7 +48,8 @@ describe("recommendation freshness", () => {
 
   it("keeps low-view discovery out while allowing trusted subscriptions", () => {
     expect(isPopularNewCreator(999n)).toBe(false);
-    expect(isPopularNewCreator(1000n)).toBe(true);
+    expect(isPopularNewCreator(9_999n)).toBe(false);
+    expect(isPopularNewCreator(10_000n)).toBe(true);
   });
 
   it("keeps subscription candidates available longer than a sync cache", () => {

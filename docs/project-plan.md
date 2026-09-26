@@ -2,7 +2,7 @@
 
 ## Cel produktu
 
-Watchflow pomaga widzowi świadomie wybrać film pasujący do czasu, intencji i zainteresowań. Wynikiem jest skończona sesja maksymalnie trzech materiałów albo pięć alternatyw pojedynczego filmu, a nie kolejny nieskończony feed. Analityka twórców pozostaje opcjonalnym dodatkiem.
+Watchflow pomaga widzowi świadomie wybrać film pasujący do czasu, intencji i zainteresowań. Wynikiem jest skończona sesja albo skończony zestaw alternatyw pojedynczego filmu, a nie kolejny nieskończony feed. Użytkownik może wybrać 3, 5 lub 10 wyników. Analityka twórców pozostaje opcjonalnym dodatkiem.
 
 ## Zrealizowany przepływ live
 
@@ -16,6 +16,7 @@ Watchflow pomaga widzowi świadomie wybrać film pasujący do czasu, intencji i 
 - Po zalogowaniu profil z PostgreSQL jest źródłem prawdy. Lokalny profil może zostać przeniesiony tylko raz, gdy konto nie ma jeszcze własnych ustawień.
 - Szkic filtrów oraz ostatni zestaw rekomendacji są przywracane po odświeżeniu. Konto live przechowuje je w PostgreSQL, a demo w wersjonowanych kluczach `localStorage`.
 - Avatar Google jest pobierany wyłącznie z zaufanego hosta HTTPS, ograniczony do 1 MB i cache'owany w bazie. Interfejs używa inicjałów, gdy obraz jest niedostępny.
+- Historia oglądania może zostać zaimportowana z `watch-history.json` pobranego przez Google Takeout. Plik jest parsowany w przeglądarce, do backendu trafia maksymalnie 5000 znormalizowanych wpisów, a użytkownik osobno włącza lub wyłącza ten sygnał w profilu. Historia nie jest pobierana przez YouTube Data API.
 
 ## Sygnały i synchronizacja
 
@@ -29,7 +30,7 @@ Nowi twórcy są wyszukiwani maksymalnie dla dwóch języków na sesję. Zapytan
 
 ## Ranking
 
-Ranking jest deterministyczny. Temat filmu jest wyznaczany z tytułu, opisu, tagów oraz kontekstu kanału, czyli jego nazwy i opisu. Dzięki temu wybór `Health & fitness` obejmuje także kanały opisujące transformacje sylwetki bez słowa „health” w każdym tytule.
+Ranking jest deterministyczny. Temat filmu jest wyznaczany z tytułu, opisu, tagów oraz kontekstu kanału, czyli jego nazwy i opisu. Dzięki temu wybór `Health & fitness` obejmuje także kanały opisujące transformacje sylwetki bez słowa „health” w każdym tytule. Dodatkowo materiały z kategorią YouTube Gaming nie przechodzą filtra finansowego tylko dlatego, że w tytule pojawiło się słowo „money”.
 
 Ranking korzysta z następujących sygnałów:
 
@@ -38,6 +39,8 @@ Ranking korzysta z następujących sygnałów:
 - profil, polubienia i aktywność: do 20 punktów;
 - dopasowanie czasu: do 15 punktów, gdy limit jest aktywny;
 - świeżość i feedback odejmują punkty od wyniku wewnętrznego.
+- popularność i proporcja polubień wzmacniają odkrywanie nowych twórców, a domyślny próg 10 000 wyświetleń odrzuca przypadkowe materiały o minimalnym ruchu;
+- wybrana intencja zmienia słowa wyszukiwania oraz ranking, np. `Solve a problem` preferuje poradniki i instrukcje, a `Keep me company` rozmowy i podcasty.
 
 Wynik liczbowy służy wyłącznie do sortowania. Interfejs pokazuje `Excellent fit`, `Strong fit`, `Good fit` albo `Exploratory pick` oraz maksymalnie trzy rzeczywiste sygnały. Nie są używane suwaki głębokości, tempa ani znajomości, których nie da się wiarygodnie wyprowadzić z metadanych YouTube.
 
@@ -60,6 +63,7 @@ Feedback zmienia kolejne wyniki: obejrzany materiał jest wykluczany, brak zaint
 - `POST /api/recommendations/session/:sessionId/next`;
 - `POST /api/recommendations/:videoId/feedback` i `POST /api/recommendations/:videoId/opened`;
 - `GET /api/queue?sort=...`, `POST /api/queue`, `DELETE /api/queue/:videoId`.
+- `GET /api/viewer/history`, `POST /api/viewer/history/import`, `DELETE /api/viewer/history`.
 
 Kolejkę można sortować według daty zapisania, daty publikacji i długości. Usunięcie pozycji jest trwałe i ograniczone do konta zalogowanego użytkownika.
 

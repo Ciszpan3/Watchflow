@@ -75,7 +75,7 @@ function TagInput({ label, placeholder, values, onChange }: {
   );
 }
 
-export function OnboardingModal({ open, profile, signals, editing, onProgress, onComplete, onSkip, onClose }: {
+export function OnboardingModal({ open, profile, signals, editing, onProgress, onComplete, onSkip, onClose, onOpenHistory }: {
   open: boolean;
   profile: ViewerProfile;
   signals: ViewerSignalsSummary;
@@ -84,6 +84,7 @@ export function OnboardingModal({ open, profile, signals, editing, onProgress, o
   onComplete: (profile: ViewerProfile) => Promise<void>;
   onSkip: (profile: ViewerProfile) => void;
   onClose: () => void;
+  onOpenHistory: () => void;
 }) {
   const [step, setStep] = React.useState(1);
   const [draft, setDraft] = React.useState(profile);
@@ -218,8 +219,9 @@ export function OnboardingModal({ open, profile, signals, editing, onProgress, o
               <div className="signal-permissions">
                 <label><span className="signal-icon"><Users /></span><span><strong>Use my subscriptions</strong><small>{signals.subscriptions.detail}</small></span><input type="checkbox" checked={draft.useSubscriptions} onChange={(event) => setDraft((current) => ({ ...current, useSubscriptions: event.target.checked }))} /></label>
                 <label><span className="signal-icon"><ThumbsUp /></span><span><strong>Use my liked videos</strong><small>{signals.likedVideos.detail}</small></span><input type="checkbox" checked={draft.useLikedVideos} onChange={(event) => setDraft((current) => ({ ...current, useLikedVideos: event.target.checked }))} /></label>
+                <label><span className="signal-icon"><History /></span><span><strong>Use imported history</strong><small>{signals.watchHistory.detail}</small></span><input type="checkbox" checked={draft.useWatchHistory} onChange={(event) => setDraft((current) => ({ ...current, useWatchHistory: event.target.checked }))} /></label>
               </div>
-              <div className="api-limits"><div><History /><span><strong>Watch history</strong><small>Not available through the YouTube Data API</small></span></div><div><ListVideo /><span><strong>Watch Later</strong><small>Not available through the YouTube Data API</small></span></div></div>
+              <div className="api-limits"><div><History /><span><strong>Watch history</strong><small>Imported manually from Google Takeout. It is never read through the YouTube API.</small></span><button className="button secondary" type="button" onClick={onOpenHistory}>Import history</button></div><div><ListVideo /><span><strong>Watch Later</strong><small>Not available through the YouTube Data API.</small></span></div></div>
             </section>
           )}
           {error && <p className="onboarding-error" role="alert">{error}</p>}

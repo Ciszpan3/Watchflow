@@ -27,6 +27,7 @@ function renderModal(overrides = {}) {
     onComplete: vi.fn(),
     onSkip: vi.fn(),
     onClose: vi.fn(),
+    onOpenHistory: vi.fn(),
     ...overrides
   };
   render(<OnboardingModal {...props} />);

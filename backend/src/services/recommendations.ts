@@ -39,6 +39,15 @@ export function isPopularNewCreator(viewCount: bigint | null) {
   return Number(viewCount ?? 0) >= env.minimumNewCreatorViews;
 }
 
+const intentSearchTerms: Record<RecommendationRequest["intent"], string[]> = {
+  learn: ["explained", "tutorial", "learn"],
+  relax: ["calm", "peaceful", "slow"],
+  inspire: ["ideas", "inspiration", "creative"],
+  company: ["podcast", "conversation", "interview"],
+  solve: ["how to", "guide", "fix"],
+  entertain: ["funny", "entertaining", "challenge"]
+};
+
 function ageCutoff(maxAgeMonths: RecommendationRequest["maxAgeMonths"], now = new Date()) {
   if (maxAgeMonths === null) return null;
   const cutoff = new Date(now);
@@ -92,7 +101,7 @@ async function searchNewVideos(userId: string, request: RecommendationRequest, p
 
   for (const language of languages) {
     const queryTerms = topics.flatMap(topicSearchTerms).slice(0, 10);
-    const query = `${queryTerms.join("|") || "interesting documentary"} ${request.intent}`.trim();
+    const query = `${queryTerms.join("|") || "interesting documentary"} ${intentSearchTerms[request.intent].join("|")}`.trim();
     const key = searchCacheKey(query, language, request.formats.length === 1 ? request.formats[0] : undefined, request.maxAgeMonths);
     const cached = await db.searchCache.findUnique({ where: { cacheKey: key } });
     let ids = cached && cached.expiresAt > new Date() ? cached.videoIds : [];
@@ -204,12 +213,19 @@ export function freshnessReason(source: "subscribed" | "new", signal: string) {
 function normalizeStoredRequest(value: Prisma.JsonValue): RecommendationRequest | null {
   if (isRecommendationRequest(value)) return value;
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const legacy = { ...value, timeLimitEnabled: "timeLimitEnabled" in value ? value.timeLimitEnabled : true, recommendationMode: "recommendationMode" in value ? value.recommendationMode : "session", maxAgeMonths: 12 };
+  const legacyMode = "recommendationMode" in value && value.recommendationMode === "single" ? "single" : "session";
+  const legacy = {
+    ...value,
+    timeLimitEnabled: "timeLimitEnabled" in value ? value.timeLimitEnabled : true,
+    recommendationMode: legacyMode,
+    resultCount: "resultCount" in value ? value.resultCount : legacyMode === "single" ? 5 : 3,
+    maxAgeMonths: 12
+  };
   return isRecommendationRequest(legacy) ? legacy : null;
 }
 
 function sourceOrder(request: RecommendationRequest) {
-  const count = request.recommendationMode === "single" ? 5 : 3;
+  const count = request.resultCount;
   if (request.source !== "mixed") return Array.from({ length: count }, () => request.source as "subscribed" | "new");
   return Array.from({ length: count }, (_, index) => index % 2 === 0 ? "subscribed" as const : "new" as const);
 }
@@ -226,6 +242,19 @@ function durationFit(duration: number, request: RecommendationRequest) {
 
 function effectiveTopics(video: Video & { channel: Channel }) {
   return [...new Set([...video.topics, ...classifyTopicsFromText(`${video.channel.title} ${video.channel.description ?? ""}`)])];
+}
+
+function topicCategoryMismatch(video: Video, requestedTopics: string[]) {
+  return video.categoryId === "20" && requestedTopics.length > 0 && !requestedTopics.includes("gaming");
+}
+
+function popularityScore(video: Video, source: "subscribed" | "new") {
+  if (source !== "new") return 0;
+  const views = Number(video.viewCount ?? 0);
+  const likes = Number(video.likeCount ?? 0);
+  const viewScore = Math.min(10, Math.max(0, (Math.log10(Math.max(views, 1)) - 4) * 2));
+  const likeRate = views > 0 ? Math.min(2, (likes / views) * 40) : 0;
+  return viewScore + likeRate;
 }
 
 function selectCandidates(scored: ScoredCandidate[], request: RecommendationRequest) {
@@ -307,12 +336,13 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
   let quotaLimited = false;
   if (request.source !== "subscribed") quotaLimited = await searchNewVideos(userId, request, profile);
 
-  const [candidateRows, likedRows, feedbackRows, activityRows, savedRows] = await Promise.all([
+  const [candidateRows, likedRows, feedbackRows, activityRows, savedRows, historyRows] = await Promise.all([
     db.userVideoCandidate.findMany({ where: { userId, expiresAt: { gt: new Date() } }, include: { video: { include: { channel: true } } } }),
     db.likedVideo.findMany({ where: { userId }, include: { video: true } }),
     db.recommendationFeedback.findMany({ where: { userId }, include: { video: true } }),
     db.viewingActivity.findMany({ where: { userId, createdAt: { gt: new Date(Date.now() - 90 * 86_400_000) } }, include: { video: true } }),
-    db.savedVideo.findMany({ where: { userId }, include: { video: true } })
+    db.savedVideo.findMany({ where: { userId }, include: { video: true } }),
+    db.watchHistoryItem.findMany({ where: { userId }, orderBy: { watchedAt: "desc" }, take: 5000 })
   ]);
   const candidates: Candidate[] = candidateRows.map((row) => ({ source: row.source, video: row.video }));
   const requestedTopics = request.topics.length ? request.topics : [...profile.interests, ...profile.customTopics];
@@ -320,8 +350,11 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
   const likedChannels = new Set(likedRows.map((row) => row.video.channelId));
   const openedTopics = activityRows.filter((row) => row.type === "OPENED").flatMap((row) => row.video.topics);
   const savedTopics = savedRows.flatMap((row) => row.video.topics);
+  const historyTopics = historyRows.flatMap((row) => row.topics);
+  const historyChannels = new Set(historyRows.map((row) => row.channelTitle).filter((value): value is string => Boolean(value)));
   const excludedVideoIds = new Set([
     ...feedbackRows.map((row) => row.videoId),
+    ...(profile.useWatchHistory ? historyRows.flatMap((row) => row.videoId ? [row.videoId] : []) : []),
     ...(options.excludedVideoIds ?? [])
   ]);
   const dislikedTopics = feedbackRows.filter((row) => row.reason === "NOT_INTERESTED").flatMap((row) => row.video.topics);
@@ -340,6 +373,7 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
     if (source === "new" && !isPopularNewCreator(video.viewCount)) return [];
     if (!request.formats.includes(video.format as never) || !request.languages.includes((video.language === "pl" ? "pl" : "en") as never)) return [];
     if (request.topics.length && !overlap(topics, request.topics).length) return [];
+    if (topicCategoryMismatch(video, requestedTopics)) return [];
     if (overlap(topics, profile.excludedTopics).length) return [];
     if (request.audioFriendly && !video.audioFriendly) return [];
 
@@ -349,20 +383,24 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
     const affinityRaw = overlap(topics, likedTopics).length * 12
       + (likedChannels.has(video.channelId) ? 28 : 0)
       + overlap(topics, openedTopics).length * 4
-      + overlap(topics, savedTopics).length * 6;
+      + overlap(topics, savedTopics).length * 6
+      + (profile.useWatchHistory ? overlap(topics, historyTopics).length * 5 : 0)
+      + (profile.useWatchHistory && historyChannels.has(video.channel.title) ? 12 : 0);
     const affinityScore = profile.useLikedVideos ? Math.min(20, affinityRaw / 5) : 10;
     const durationMinutes = Math.max(1, Math.ceil(video.durationSeconds / 60));
     const durationScore = durationFit(durationMinutes, request);
+    const popularity = popularityScore(video, source);
     const feedbackPenalty = overlap(topics, dislikedTopics).length * 12
       + (repeatedChannels.has(video.channelId) ? 18 : 0)
       + (avoidLong && durationMinutes > 30 ? 12 : 0)
       + (request.antiClickbait ? video.clickbaitScore * 0.15 : 0);
-    const match = Math.max(0, Math.min(90, Math.round(intentScore + topicScore + affinityScore + durationScore - feedbackPenalty - freshness.penalty)));
+    const match = Math.max(0, Math.min(100, Math.round(intentScore + topicScore + affinityScore + durationScore + popularity - feedbackPenalty - freshness.penalty)));
     const sourceSignal = source === "subscribed" ? "From your subscriptions" : "New creator discovery";
-    const tasteSignal = affinityRaw >= 40 ? "Strong liked-video fit" : topicMatches[0] ? `Matches your ${topicMatches[0]} interest` : null;
+    const popularitySignal = source === "new" ? "Popular on YouTube" : null;
+    const tasteSignal = profile.useWatchHistory && overlap(topics, historyTopics).length ? "Related to your imported watch history" : affinityRaw >= 40 ? "Strong liked-video fit" : topicMatches[0] ? `Matches your ${topicMatches[0]} interest` : null;
     const intentSignal = video.intents.includes(request.intent) ? `Fits ${request.intent}` : null;
-    const signals = [sourceSignal, freshness.signal, tasteSignal ?? intentSignal].filter((signal): signal is string => Boolean(signal)).slice(0, 3);
-    const reason = `${freshnessReason(source, freshness.signal)}.${tasteSignal ? ` ${tasteSignal}.` : ""}`;
+    const signals = [sourceSignal, popularitySignal ?? freshness.signal, tasteSignal ?? intentSignal].filter((signal): signal is string => Boolean(signal)).slice(0, 3);
+    const reason = `${freshnessReason(source, freshness.signal)}.${tasteSignal ? ` ${tasteSignal}.` : intentSignal ? ` ${intentSignal}.` : ""}`;
     return [{ candidate, match, reason, signals, durationMinutes }];
   }).sort((left, right) => right.match - left.match);
 

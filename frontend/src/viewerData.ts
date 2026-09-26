@@ -6,7 +6,8 @@ import type {
   RecommendationSessionResponse,
   ScoredRecommendation,
   SourceMode,
-  ViewerProfile
+  ViewerProfile,
+  WatchHistoryImportItem
 } from "./viewerTypes";
 
 const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
@@ -122,12 +123,13 @@ function overlap(left: string[], right: string[]) {
   return left.filter((value) => right.includes(value));
 }
 
-function scoreVideo(video: Recommendation, request: RecommendationSessionRequest, profile: ViewerProfile) {
+function scoreVideo(video: Recommendation, request: RecommendationSessionRequest, profile: ViewerProfile, history: WatchHistoryImportItem[]) {
   const requestedTopics = request.topics.length ? request.topics : [...profile.interests, ...profile.customTopics];
   const topicMatches = overlap(video.topics, requestedTopics);
   const intentScore = video.intents.includes(request.intent) ? 30 : 0;
   const topicScore = topicMatches.length ? 25 : 0;
   const affinityScore = profile.useLikedVideos ? video.likedAffinity * 0.2 : 10;
+  const historyMatch = profile.useWatchHistory && history.some((item) => item.channelTitle === video.channel || item.title.toLowerCase().split(/\s+/).some((word) => word.length > 4 && video.title.toLowerCase().includes(word))) ? 8 : 0;
   const tolerance = Math.max(5, Math.ceil(request.minutes * 0.2));
   const distance = Math.abs(video.duration - request.minutes);
   const durationScore = !request.timeLimitEnabled ? 0 : request.recommendationMode === "single"
@@ -136,7 +138,7 @@ function scoreVideo(video: Recommendation, request: RecommendationSessionRequest
   const ageDays = video.publishedAt ? Math.max(0, (Date.now() - new Date(video.publishedAt).getTime()) / 86_400_000) : Number.POSITIVE_INFINITY;
   const freshnessPenalty = ageDays <= 30 ? 0 : ageDays <= 183 ? 2 : ageDays <= 365 ? 5 : ageDays <= 730 ? 10 : 18;
   return {
-    value: Math.max(0, Math.min(90, Math.round(intentScore + topicScore + affinityScore + durationScore - freshnessPenalty))),
+    value: Math.max(0, Math.min(100, Math.round(intentScore + topicScore + affinityScore + historyMatch + durationScore - freshnessPenalty))),
     topicMatches
   };
 }
@@ -158,10 +160,10 @@ function diversify(candidates: RankedRecommendation[], selected: RankedRecommend
   });
 }
 
-function enrich(video: Recommendation, request: RecommendationSessionRequest, profile: ViewerProfile): RankedRecommendation {
-  const scored = scoreVideo(video, request, profile);
+function enrich(video: Recommendation, request: RecommendationSessionRequest, profile: ViewerProfile, history: WatchHistoryImportItem[]): RankedRecommendation {
+  const scored = scoreVideo(video, request, profile, history);
   const sourceSignal = video.source === "subscribed" ? "From your subscriptions" : "New creator discovery";
-  const affinitySignal = profile.useLikedVideos && video.likedAffinity >= 70 ? "Strong liked-video fit" : null;
+  const affinitySignal = profile.useWatchHistory && history.some((item) => item.channelTitle === video.channel) ? "Related to watch history" : profile.useLikedVideos && video.likedAffinity >= 70 ? "Strong liked-video fit" : null;
   const topicSignal = scored.topicMatches[0] ? `Matches your ${scored.topicMatches[0]} interest` : video.intents.includes(request.intent) ? `Fits ${request.intent}` : null;
   return {
     ...video,
@@ -186,10 +188,11 @@ export function createDemoSession(
   videos = recommendations,
   excludedVideoIds: string[] = [],
   page = 1,
-  chainId = `demo-chain-${Date.now()}`
+  chainId = `demo-chain-${Date.now()}`,
+  history: WatchHistoryImportItem[] = []
 ): RecommendationSessionResponse {
   const excluded = [...profile.excludedTopics];
-  const excludedIds = new Set(excludedVideoIds);
+  const excludedIds = new Set([...excludedVideoIds, ...(profile.useWatchHistory ? history.flatMap((item) => item.videoId ? [item.videoId] : []) : [])]);
   const sourceCandidates = videos.filter((video) => sourceAllowed(video, request.source) && !excludedIds.has(video.id));
   const filtered = sourceCandidates.filter((video) => {
     const matchesTopic = request.topics.length === 0 || overlap(video.topics, request.topics).length > 0;
@@ -211,7 +214,7 @@ export function createDemoSession(
   }
 
   const ranked = filtered
-    .map((video) => enrich(video, request, profile))
+    .map((video) => enrich(video, request, profile, history))
     .sort((left, right) => request.recommendationMode === "single" && request.timeLimitEnabled
       ? Math.abs(left.duration - request.minutes) - Math.abs(right.duration - request.minutes) || right.score - left.score
       : right.score - left.score);
@@ -219,7 +222,7 @@ export function createDemoSession(
     subscribed: ranked.filter((video) => video.source === "subscribed"),
     new: ranked.filter((video) => video.source === "new")
   };
-  const count = request.recommendationMode === "single" ? 5 : 3;
+  const count = request.resultCount;
   const preferredSources: Array<"subscribed" | "new"> = request.source === "mixed"
     ? Array.from({ length: count }, (_, index) => index % 2 === 0 ? "subscribed" : "new")
     : Array.from({ length: count }, () => request.source as "subscribed" | "new");

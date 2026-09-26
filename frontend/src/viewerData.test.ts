@@ -7,6 +7,7 @@ const request: RecommendationSessionRequest = {
   minutes: 45,
   timeLimitEnabled: true,
   recommendationMode: "session",
+  resultCount: 3,
   intent: "learn",
   source: "mixed",
   topics: [],
@@ -57,7 +58,7 @@ describe("viewer recommendation sessions", () => {
   });
 
   it("returns five standalone alternatives and keeps the mixed source ratio", () => {
-    const result = createDemoSession({ ...request, recommendationMode: "single", minutes: 15 }, defaultViewerProfile);
+    const result = createDemoSession({ ...request, recommendationMode: "single", resultCount: 5, minutes: 15 }, defaultViewerProfile);
     expect(result.items).toHaveLength(5);
     expect(result.items.map((video) => video.source)).toEqual(["subscribed", "new", "subscribed", "new", "subscribed"]);
     expect(result.naturalEnd).toBe(false);

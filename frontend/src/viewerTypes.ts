@@ -4,6 +4,7 @@ export type VideoFormat = "standard" | "short" | "live" | "podcast";
 export type LanguageCode = "en" | "pl";
 export type OnboardingStatus = "not_started" | "in_progress" | "completed" | "skipped";
 export type RecommendationMode = "session" | "single";
+export type ResultCount = 3 | 5 | 10;
 export type MaxAgeMonths = 1 | 3 | 6 | 12 | 24 | null;
 export type FitTier = "excellent" | "strong" | "good" | "exploratory";
 export type QueueSort = "saved_newest" | "saved_oldest" | "published_newest" | "published_oldest" | "shortest" | "longest";
@@ -21,6 +22,7 @@ export type ViewerProfile = {
   antiClickbait: boolean;
   useSubscriptions: boolean;
   useLikedVideos: boolean;
+  useWatchHistory: boolean;
 };
 
 export type SignalState = "available" | "ready" | "disabled" | "unavailable" | "pending" | "error";
@@ -46,7 +48,7 @@ export type ViewerSignalsSummary = {
   lastSyncedAt?: string | null;
   subscriptions: { state: SignalState; detail: string; count?: number };
   likedVideos: { state: SignalState; detail: string; count?: number };
-  watchHistory: { state: "unavailable"; detail: string };
+  watchHistory: { state: SignalState; detail: string; count?: number; importedAt?: string | null };
   watchLater: { state: "unavailable"; detail: string };
   sync?: SyncSummary | null;
 };
@@ -98,6 +100,7 @@ export type RecommendationSessionRequest = {
   minutes: number;
   timeLimitEnabled: boolean;
   recommendationMode: RecommendationMode;
+  resultCount: ResultCount;
   intent: WatchIntent;
   source: SourceMode;
   topics: string[];
@@ -126,4 +129,16 @@ export type RecommendationSessionResponse = {
   items: ScoredRecommendation[];
   emptyReason?: "no_source_matches" | "no_filter_matches" | "no_fresh_matches" | "quota_limited";
   quotaLimited?: boolean;
+};
+
+export type WatchHistoryImportItem = {
+  videoId: string | null;
+  title: string;
+  channelTitle: string | null;
+  watchedAt: string;
+};
+
+export type WatchHistorySummary = {
+  count: number;
+  importedAt: string | null;
 };

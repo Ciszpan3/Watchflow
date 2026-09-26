@@ -49,6 +49,7 @@ import {
   getQueue,
   getLatestRecommendationSession,
   getSessionDraft,
+  getWatchHistory,
   getViewerProfile,
   getViewerSignals,
   logout,
@@ -61,7 +62,9 @@ import {
   saveSessionDraft,
   saveToQueue,
   sendFeedback,
-  saveViewerProfile
+  saveViewerProfile,
+  importWatchHistory,
+  clearWatchHistory
 } from "../viewerApi";
 import type {
   AuthSession,
@@ -69,6 +72,7 @@ import type {
   MaxAgeMonths,
   QueueItem,
   QueueSort,
+  ResultCount,
   RecommendationMode,
   RecommendationSessionRequest,
   ScoredRecommendation,
@@ -76,9 +80,11 @@ import type {
   VideoFormat,
   ViewerProfile,
   ViewerSignalsSummary,
+  WatchHistoryImportItem,
   WatchIntent
 } from "../viewerTypes";
 import { OnboardingModal } from "./OnboardingModal";
+import { WatchHistoryModal } from "./WatchHistoryModal";
 
 const navItems = [
   { id: "for-you", label: "For You", icon: Sparkles },
@@ -127,6 +133,7 @@ const initialRequest: RecommendationSessionRequest = {
   minutes: 45,
   timeLimitEnabled: true,
   recommendationMode: "session",
+  resultCount: 3,
   intent: "learn",
   source: defaultViewerProfile.defaultSource,
   topics: [],
@@ -153,7 +160,7 @@ const initialSignals: ViewerSignalsSummary = {
   connected: false,
   subscriptions: { state: "available", detail: "Connect YouTube to make this signal available." },
   likedVideos: { state: "available", detail: "Connect YouTube to make this signal available." },
-  watchHistory: { state: "unavailable", detail: "Not available through the YouTube Data API." },
+  watchHistory: { state: "available", count: 0, importedAt: null, detail: "Import a Google Takeout file if you want to use this signal." },
   watchLater: { state: "unavailable", detail: "Not available through the YouTube Data API." }
 };
 
@@ -226,9 +233,12 @@ export function ViewerDashboard() {
   const [appError, setAppError] = React.useState<string | null>(null);
   const [onboardingOpen, setOnboardingOpen] = React.useState(false);
   const [editingProfile, setEditingProfile] = React.useState(false);
+  const [historyOpen, setHistoryOpen] = React.useState(false);
+  const [historyItems, setHistoryItems] = React.useState<WatchHistoryImportItem[]>([]);
   const [minutes, setMinutes] = React.useState(initialRequest.minutes);
   const [timeLimitEnabled, setTimeLimitEnabled] = React.useState(initialRequest.timeLimitEnabled);
   const [recommendationMode, setRecommendationMode] = React.useState<RecommendationMode>(initialRequest.recommendationMode);
+  const [resultCount, setResultCount] = React.useState<ResultCount>(initialRequest.resultCount);
   const [intent, setIntent] = React.useState<WatchIntent>(initialRequest.intent);
   const [source, setSource] = React.useState<SourceMode>(initialRequest.source);
   const [topics, setTopics] = React.useState<string[]>([]);
@@ -265,6 +275,7 @@ export function ViewerDashboard() {
     setMinutes(request.minutes);
     setTimeLimitEnabled(request.timeLimitEnabled);
     setRecommendationMode(request.recommendationMode);
+    setResultCount(request.resultCount);
     setIntent(request.intent);
     setSource(request.source);
     setTopics(request.topics);
@@ -293,8 +304,8 @@ export function ViewerDashboard() {
         if (cancelled) return;
         setAuthSession(backendSession);
         if (backendSession.authenticated) {
-          const [profileResponse, liveSignals, queue, draft, latest] = await Promise.all([
-            getLiveViewerProfile(), getLiveViewerSignals(), getQueue(), getSessionDraft("live"), getLatestRecommendationSession("live")
+          const [profileResponse, liveSignals, queue, draft, latest, history] = await Promise.all([
+            getLiveViewerProfile(), getLiveViewerSignals(), getQueue(), getSessionDraft("live"), getLatestRecommendationSession("live"), getWatchHistory("live")
           ]);
           const liveProfile = await migrateLocalProfile(localProfile, profileResponse.profile, profileResponse.source);
           if (cancelled) return;
@@ -303,6 +314,7 @@ export function ViewerDashboard() {
           if (draft.request) applySessionRequest(draft.request); else applyProfileDefaults(liveProfile);
           setSignals(liveSignals);
           setLiveQueue(queue.items);
+          setHistoryItems(history.items);
           setSaved(new Set(queue.items.map((item) => item.id)));
           if (latest.session) setSession(latest.session);
           else setSession({
@@ -318,10 +330,12 @@ export function ViewerDashboard() {
             if (syncResult.status === "queued" || syncResult.status === "already_running") setSyncing(true);
           }
         } else {
-          const [draft, latest] = await Promise.all([getSessionDraft("demo"), getLatestRecommendationSession("demo")]);
+          const [draft, latest, history] = await Promise.all([getSessionDraft("demo"), getLatestRecommendationSession("demo"), getWatchHistory("demo")]);
           setProfile(localProfile);
+          setHistoryItems(history.items);
           if (draft.request) applySessionRequest(draft.request); else applyProfileDefaults(localProfile);
-          setSignals(await getViewerSignals(false, localProfile));
+          const demoSignals = await getViewerSignals(false, localProfile);
+          setSignals({ ...demoSignals, watchHistory: { ...demoSignals.watchHistory, count: history.count, importedAt: history.importedAt, state: localProfile.useWatchHistory ? history.count ? "ready" : "available" : "disabled" } });
           setSession(latest.session ?? createDemoSession({ ...initialRequest, source: localProfile.defaultSource, formats: localProfile.formats, languages: localProfile.languages, audioFriendly: localProfile.audioFriendly, antiClickbait: localProfile.antiClickbait }, localProfile));
         }
         if (oauthError) setAppError("Google connection could not be completed. Try connecting again or continue with demo data.");
@@ -364,8 +378,8 @@ export function ViewerDashboard() {
   }, [hydrated, mode, queueSort]);
 
   const buildRequest = React.useCallback((sourceOverride?: SourceMode): RecommendationSessionRequest => ({
-    minutes, timeLimitEnabled, recommendationMode, intent, source: sourceOverride ?? source, topics, formats, languages, maxAgeMonths, audioFriendly, antiClickbait
-  }), [antiClickbait, audioFriendly, formats, intent, languages, maxAgeMonths, minutes, recommendationMode, source, timeLimitEnabled, topics]);
+    minutes, timeLimitEnabled, recommendationMode, resultCount, intent, source: sourceOverride ?? source, topics, formats, languages, maxAgeMonths, audioFriendly, antiClickbait
+  }), [antiClickbait, audioFriendly, formats, intent, languages, maxAgeMonths, minutes, recommendationMode, resultCount, source, timeLimitEnabled, topics]);
 
   React.useEffect(() => {
     if (!hydrated) return;
@@ -383,12 +397,12 @@ export function ViewerDashboard() {
     setAppError(null);
     if (sourceOverride) setSource(sourceOverride);
     try {
-      const response = await createRecommendationSession(buildRequest(sourceOverride), profile, mode);
+      const response = await createRecommendationSession(buildRequest(sourceOverride), profile, mode, historyItems);
       setSession(response);
       saveLatestRecommendationSession(response);
-      const expectedCount = response.recommendationMode === "single" ? 5 : 3;
+      const expectedCount = response.request.resultCount;
       setToast({ message: response.items.length
-        ? response.items.length < expectedCount ? `Found ${response.items.length} fresh matches. Older videos were not used as filler.` : response.recommendationMode === "single" ? "Five fresh alternatives are ready." : "A fresh session is ready. It ends when the last card ends."
+        ? response.items.length < expectedCount ? `Found ${response.items.length} fresh matches. Older videos were not used as filler.` : `${expectedCount} fresh matches are ready.`
         : response.emptyReason === "quota_limited" ? "Today's discovery search limit has been reached. Subscription results remain available."
           : response.emptyReason === "no_fresh_matches" ? "No recent matches are available for these filters. Older videos were left out."
             : "No exact matches yet. Adjust a filter or broaden the source." });
@@ -404,7 +418,7 @@ export function ViewerDashboard() {
     setBuilding(true);
     setAppError(null);
     try {
-      const response = await createNextRecommendationSession(session, profile);
+      const response = await createNextRecommendationSession(session, profile, historyItems);
       setSession(response);
       saveLatestRecommendationSession(response);
       setToast({ message: response.items.length ? `Set ${response.page} is ready with no repeats.` : "No more matches for these filters." });
@@ -482,11 +496,13 @@ export function ViewerDashboard() {
 
   function useDemoData() {
     void getViewerProfile().then(async (localProfile) => {
-      const [draft, latest] = await Promise.all([getSessionDraft("demo"), getLatestRecommendationSession("demo")]);
+      const [draft, latest, history] = await Promise.all([getSessionDraft("demo"), getLatestRecommendationSession("demo"), getWatchHistory("demo")]);
       setMode("demo");
       setProfile(localProfile);
+      setHistoryItems(history.items);
       if (draft.request) applySessionRequest(draft.request); else applyProfileDefaults(localProfile);
-      setSignals(await getViewerSignals(false, localProfile));
+      const demoSignals = await getViewerSignals(false, localProfile);
+      setSignals({ ...demoSignals, watchHistory: { ...demoSignals.watchHistory, count: history.count, importedAt: history.importedAt, state: localProfile.useWatchHistory ? history.count ? "ready" : "available" : "disabled" } });
       setSession(latest.session ?? createDemoSession(initialRequest, localProfile));
       setSaved(new Set(["city-history", "woodworking"]));
       setAppError(null);
@@ -518,8 +534,23 @@ export function ViewerDashboard() {
     }
   }
 
+  async function handleHistoryImport(items: WatchHistoryImportItem[]) {
+    const summary = await importWatchHistory(items, mode);
+    setHistoryItems(items);
+    setSignals((current) => ({ ...current, watchHistory: { ...current.watchHistory, count: summary.count, importedAt: summary.importedAt, state: profile.useWatchHistory ? "ready" : "available" } }));
+    setToast({ message: `${summary.count.toLocaleString()} watch history entries imported.` });
+  }
+
+  async function handleHistoryClear() {
+    await clearWatchHistory(mode);
+    setHistoryItems([]);
+    setSignals((current) => ({ ...current, watchHistory: { ...current.watchHistory, count: 0, importedAt: null, state: profile.useWatchHistory ? "available" : "disabled" } }));
+    setToast({ message: "Imported watch history removed." });
+  }
+
   const activeFilterLabels = [
     recommendationMode === "session" ? "Watch session" : "Single video",
+    `${resultCount} results`,
     timeLimitEnabled ? `${minutes} min` : "No time limit",
     ...topics.map((topic) => interestOptions.find((item) => item.id === topic)?.label ?? topic),
     formats.length < 4 ? formats.map((format) => formatLabels[format]).join(" + ") : "All formats",
@@ -552,14 +583,14 @@ export function ViewerDashboard() {
           <div className="intent-heading"><div><span className="section-kicker"><WandSparkles />Build a viewing session</span><h2>What do you want to watch right now?</h2><p>Set the moment. Your taste profile takes care of the rest.</p></div><div className="composer-status"><span className={`save-state ${saveState}`}><span />{saveState === "saving" ? "Saving…" : saveState === "error" ? "Couldn't save" : saveState === "saved" ? "Preferences saved" : "Ready"}</span><span className={`demo-label ${mode === "live" ? "live" : ""}`}><span />{mode === "live" ? "Live YouTube data" : "Interactive demo"}</span></div></div>
 
           <div className="composer-layout">
-            <fieldset className="control-group time-control"><legend>How should time shape the results?</legend><div className="time-control-header"><div className="mode-segment" role="group" aria-label="Recommendation mode"><button className={recommendationMode === "session" ? "selected" : ""} type="button" onClick={() => setRecommendationMode("session")}><ListVideo />Watch session</button><button className={recommendationMode === "single" ? "selected" : ""} type="button" onClick={() => setRecommendationMode("single")}><Play />Single video</button></div><label className="time-limit-toggle"><input type="checkbox" checked={timeLimitEnabled} onChange={(event) => setTimeLimitEnabled(event.target.checked)} /><i /><span><strong>Use time limit</strong><small>{timeLimitEnabled ? "Duration affects these picks" : "Show the strongest matches"}</small></span></label></div>{timeLimitEnabled && <div className="time-picker"><div className="time-options">{[15, 30, 45, 60].map((value) => <button key={value} className={minutes === value ? "selected" : ""} type="button" onClick={() => setMinutes(value)}><Clock3 />{value} min</button>)}</div><label className="custom-time"><span>Custom</span><input type="number" min="5" max="180" value={minutes} onChange={(event) => setMinutes(Math.min(180, Math.max(5, Number(event.target.value) || 5)))} /><small>min</small></label></div>}<p className="time-help">{recommendationMode === "session" ? timeLimitEnabled ? "Up to three videos whose combined length fits your time." : "Three strong recommendations without duration affecting the ranking." : timeLimitEnabled ? "Five alternatives close to this length, not a combined playlist." : "Five strong standalone alternatives of any length."}</p></fieldset>
+            <fieldset className="control-group time-control"><legend>How should time shape the results?</legend><div className="time-control-header"><div className="mode-segment" role="group" aria-label="Recommendation mode"><button className={recommendationMode === "session" ? "selected" : ""} type="button" onClick={() => { setRecommendationMode("session"); if (resultCount === 5) setResultCount(3); }}><ListVideo />Watch session</button><button className={recommendationMode === "single" ? "selected" : ""} type="button" onClick={() => { setRecommendationMode("single"); if (resultCount === 3) setResultCount(5); }}><Play />Single video</button></div><label className="time-limit-toggle"><input type="checkbox" checked={timeLimitEnabled} onChange={(event) => setTimeLimitEnabled(event.target.checked)} /><i /><span><strong>Use time limit</strong><small>{timeLimitEnabled ? "Duration affects these picks" : "Show the strongest matches"}</small></span></label></div><div className="result-count-picker"><span>Number of results</span><div className="mode-segment" role="group" aria-label="Number of results">{([3, 5, 10] as ResultCount[]).map((value) => <button key={value} className={resultCount === value ? "selected" : ""} type="button" onClick={() => setResultCount(value)}>{value}</button>)}</div></div>{timeLimitEnabled && <div className="time-picker"><div className="time-options">{[15, 30, 45, 60].map((value) => <button key={value} className={minutes === value ? "selected" : ""} type="button" onClick={() => setMinutes(value)}><Clock3 />{value} min</button>)}</div><label className="custom-time"><span>Custom</span><input type="number" min="5" max="180" value={minutes} onChange={(event) => setMinutes(Math.min(180, Math.max(5, Number(event.target.value) || 5)))} /><small>min</small></label></div>}<p className="time-help">{recommendationMode === "session" ? timeLimitEnabled ? `Up to ${resultCount} videos whose combined length fits your time.` : `${resultCount} strong recommendations without duration affecting the ranking.` : timeLimitEnabled ? `${resultCount} alternatives close to this length, not a combined playlist.` : `${resultCount} strong standalone alternatives of any length.`}</p></fieldset>
             <fieldset className="control-group"><legend>What do you need?</legend><div className="intent-options expanded">{intentOptions.map((option) => <button key={option.value} className={intent === option.value ? "selected" : ""} type="button" onClick={() => setIntent(option.value)}><strong>{option.label}</strong><span>{option.note}</span></button>)}</div></fieldset>
             <fieldset className="control-group"><legend>Where should we look?</legend><div className="source-options">{sourceOptions.map((option) => { const Icon = option.icon; return <button key={option.value} className={source === option.value ? "selected" : ""} type="button" onClick={() => setSource(option.value)}><Icon /><span><strong>{option.label}</strong><small>{option.note}</small></span>{source === option.value && <Check />}</button>; })}</div></fieldset>
 
             <div className="filters-summary"><div><span>Active filters</span><div>{activeFilterLabels.slice(0, 4).map((label) => <small key={label}>{label}</small>)}{activeFilterLabels.length > 4 && <small>+{activeFilterLabels.length - 4}</small>}</div></div><div><button type="button" onClick={resetToProfile}><RefreshCcw />Reset</button><button type="button" aria-expanded={moreFilters} onClick={() => setMoreFilters((value) => !value)}>More filters<ChevronDown className={moreFilters ? "rotated" : ""} /></button></div></div>
 
             {moreFilters && <div className="advanced-filters">
-              <fieldset><legend>Topic for this session</legend><div className="filter-chip-row">{interestOptions.map((option) => <button key={option.id} className={topics.includes(option.id) ? "selected" : ""} type="button" onClick={() => setTopics((current) => toggleValue(current, option.id))}>{topics.includes(option.id) && <Check />}{option.label}</button>)}</div></fieldset>
+              <fieldset><legend>Topic for this session</legend><div className="filter-chip-row">{interestOptions.map((option) => <button key={option.id} className={topics.includes(option.id) ? "selected" : ""} type="button" onClick={() => setTopics((current) => toggleValue(current, option.id))}>{topics.includes(option.id) && <Check />}{option.label}</button>)}</div><small className="filter-help">We check video metadata and channel context, not only the title.</small></fieldset>
               <div className="filter-columns"><fieldset><legend>Formats</legend><div className="filter-chip-row compact">{(Object.keys(formatLabels) as VideoFormat[]).map((format) => <button key={format} className={formats.includes(format) ? "selected" : ""} type="button" onClick={() => setFormats((current) => toggleValue(current, format))}>{formatLabels[format]}</button>)}</div></fieldset><fieldset><legend>Languages</legend><div className="filter-chip-row compact">{(Object.keys(languageLabels) as LanguageCode[]).map((language) => <button key={language} className={languages.includes(language) ? "selected" : ""} type="button" onClick={() => setLanguages((current) => toggleValue(current, language))}>{languageLabels[language]}</button>)}</div></fieldset></div>
               <fieldset><legend>Published within</legend><div className="filter-chip-row compact age-filter">{ageOptions.map((option) => <button key={option.label} className={maxAgeMonths === option.value ? "selected" : ""} type="button" onClick={() => setMaxAgeMonths(option.value)}>{option.label}</button>)}</div><small className="filter-help">This is a strict limit. Watchflow will not fill the set with older videos.</small></fieldset>
               <div className="filter-columns toggles"><label className="toggle-row"><span><Brain /><span><strong>Audio-friendly</strong><small>Works without watching closely</small></span></span><input type="checkbox" checked={audioFriendly} onChange={(event) => setAudioFriendly(event.target.checked)} /><i /></label><label className="toggle-row"><span><CheckCircle2 /><span><strong>Anti-clickbait filter</strong><small>Prefer accurate titles</small></span></span><input type="checkbox" checked={antiClickbait} onChange={(event) => setAntiClickbait(event.target.checked)} /><i /></label></div>
@@ -569,7 +600,7 @@ export function ViewerDashboard() {
         </section>
 
         <section className="session-section" id="discover">
-          <div className="section-header"><div><span className="section-kicker">Made for this moment · Set {session.page}</span><h2>{session.items.length ? session.recommendationMode === "single" ? `${session.items.length} video alternatives` : `Your ${session.totalMinutes}-minute session` : session.page > 1 ? "No more matches" : session.emptyReason === "no_fresh_matches" ? "No recent matches" : "No exact matches yet"}</h2><p>{session.items.length ? session.items.length < (session.recommendationMode === "single" ? 5 : 3) ? "These are all current matches available. Older videos were not used as filler." : session.recommendationMode === "single" ? "Choose one. Each card is a standalone option." : `${session.items.length} focused picks, ordered to flow naturally.` : session.emptyReason === "no_fresh_matches" ? "Try broader filters. Watchflow left outdated videos out of this set." : "Change a filter or broaden the source to continue."}</p>{filtersChanged && session.items.length > 0 && <span className="results-outdated"><Clock3 />Filters changed after this set was generated</span>}</div>{session.items.length > 0 && session.naturalEnd && <div className="session-stop"><Check /><span><strong>Natural stopping point</strong>No endless feed after video {session.items.length}</span></div>}</div>
+          <div className="section-header"><div><span className="section-kicker">Made for this moment · Set {session.page}</span><h2>{session.items.length ? session.recommendationMode === "single" ? `${session.items.length} video alternatives` : `Your ${session.totalMinutes}-minute session` : session.page > 1 ? "No more matches" : session.emptyReason === "no_fresh_matches" ? "No recent matches" : "No exact matches yet"}</h2><p>{session.items.length ? session.items.length < session.request.resultCount ? "These are all current matches available. Older videos were not used as filler." : session.recommendationMode === "single" ? "Choose one. Each card is a standalone option." : `${session.items.length} focused picks, ordered to flow naturally.` : session.emptyReason === "no_fresh_matches" ? "Try broader filters. Watchflow left outdated videos out of this set." : "Change a filter or broaden the source to continue."}</p>{filtersChanged && session.items.length > 0 && <span className="results-outdated"><Clock3 />Filters changed after this set was generated</span>}</div>{session.items.length > 0 && session.naturalEnd && <div className="session-stop"><Check /><span><strong>Natural stopping point</strong>No endless feed after video {session.items.length}</span></div>}</div>
           {session.items.length ? <>{session.recommendationMode === "session" && <div className="session-timeline" aria-label={`${session.items.length} video session lasting ${session.totalMinutes} minutes`}>{session.items.map((video, index) => <span key={video.id} style={{ flex: video.duration }}><i>{index + 1}</i>{video.duration} min</span>)}<b>Done</b></div>}<div className={`recommendation-grid ${session.recommendationMode === "single" ? "single-mode" : ""}`}>{session.items.map((video) => <RecommendationCard key={video.id} video={video} live={mode === "live"} saved={saved.has(video.id)} onSave={() => void toggleSaved(video)} onPlay={() => void openVideo(video)} onReject={() => setFeedbackVideo(video)} />)}</div><div className="session-actions"><button className="button secondary next-set" type="button" onClick={() => void nextSet()} disabled={building || !session.hasMore}>{building ? <LoaderCircle className="spin" /> : <RefreshCcw />}{building ? "Finding another set…" : session.hasMore ? "Next set" : "No more matches"}</button><small>Previously shown videos will not repeat.</small></div></> : <div className="recommendation-empty"><Search /><strong>{mode === "live" && !signals.lastSyncedAt ? "Sync YouTube before your first live session" : session.page > 1 ? "You reached the end of these matches" : "Nothing fits every choice"}</strong><p>{mode === "live" && !signals.lastSyncedAt ? "Watchflow needs subscriptions and likes before it can rank real videos." : "We will never silently mix in a source you did not choose."}</p><div className="empty-actions">{mode === "live" && !signals.lastSyncedAt ? <button className="button secondary" type="button" onClick={() => void syncNow()} disabled={syncing}><RefreshCcw />Start sync</button> : <button className="button secondary" type="button" onClick={() => document.querySelector("#for-you")?.scrollIntoView({ behavior: "smooth" })}><SlidersHorizontal />Change filters</button>}{source !== "mixed" && <button className="button secondary" type="button" onClick={() => void generateSession("mixed")}><Users />Try Balanced instead</button>}</div></div>}
         </section>
 
@@ -581,7 +612,8 @@ export function ViewerDashboard() {
         <section className="creator-note" id="creator-tools"><BarChart3 /><div><strong>Creator analytics stays optional</strong><p>Channel performance tools can live here later, without distracting from the viewer-first experience.</p></div><span>Future add-on</span></section>
       </main>
 
-      <OnboardingModal open={onboardingOpen} profile={profile} signals={signals} editing={editingProfile} onProgress={persistProgress} onComplete={completeOnboarding} onSkip={skipOnboarding} onClose={closeOnboarding} />
+      <OnboardingModal open={onboardingOpen} profile={profile} signals={signals} editing={editingProfile} onProgress={persistProgress} onComplete={completeOnboarding} onSkip={skipOnboarding} onClose={closeOnboarding} onOpenHistory={() => setHistoryOpen(true)} />
+      <WatchHistoryModal open={historyOpen} mode={mode} summary={{ count: historyItems.length, importedAt: signals.watchHistory.importedAt ?? null }} onClose={() => setHistoryOpen(false)} onImport={handleHistoryImport} onClear={handleHistoryClear} />
       {feedbackVideo && <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setFeedbackVideo(null); }}><div className="feedback-dialog" role="dialog" aria-modal="true" aria-labelledby="feedback-title"><button className="icon-button dialog-close" type="button" onClick={() => setFeedbackVideo(null)} aria-label="Close"><X /></button><span className="feedback-icon"><ThumbsDown /></span><h2 id="feedback-title">Help us tune your recommendations</h2><p>Why isn't “{feedbackVideo.title}” right for you?</p><div>{feedbackReasons.map((reason) => <button key={reason.id} type="button" onClick={() => void submitFeedback(feedbackVideo, reason)}>{reason.label}<ChevronRight /></button>)}</div></div></div>}
       {toast && <div className={`toast ${toast.tone ?? "success"}`} role="status"><span className="status-dot" />{toast.message}</div>}
     </div>

@@ -61,6 +61,7 @@ model User {
   savedVideos            SavedVideo[]
   feedback               RecommendationFeedback[]
   activities             ViewingActivity[]
+  watchHistory           WatchHistoryItem[]
 }
 
 model GoogleAccount {
@@ -104,6 +105,7 @@ model ViewerProfile {
   antiClickbait    Boolean       @default(true)
   useSubscriptions Boolean       @default(true)
   useLikedVideos   Boolean       @default(true)
+  useWatchHistory  Boolean       @default(false)
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
   user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -287,6 +289,21 @@ model ViewingActivity {
   video     Video        @relation(fields: [videoId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
+  @@index([userId, videoId])
+}
+
+model WatchHistoryItem {
+  id           String   @id @default(cuid())
+  userId       String
+  videoId      String?
+  title        String
+  channelTitle String?
+  watchedAt    DateTime
+  topics       String[]
+  importedAt   DateTime @default(now())
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, watchedAt])
   @@index([userId, videoId])
 }
 

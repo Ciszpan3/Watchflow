@@ -4,11 +4,14 @@ import type {
   AuthSession,
   RecommendationSessionRequest,
   RecommendationSessionResponse,
+  ResultCount,
   QueueItem,
   QueueSort,
   ScoredRecommendation,
   ViewerProfile,
-  ViewerSignalsSummary
+  ViewerSignalsSummary,
+  WatchHistoryImportItem,
+  WatchHistorySummary
 } from "./viewerTypes";
 
 export const VIEWER_PROFILE_KEY = "watchflow:viewer-profile:v2";
@@ -16,6 +19,7 @@ const LEGACY_VIEWER_PROFILE_KEY = "watchflow:viewer-profile:v1";
 export const VIEWER_PROFILE_MIGRATED_KEY = "watchflow:viewer-profile-migrated:v1";
 export const VIEWER_SESSION_DRAFT_KEY = "watchflow:session-draft:v1";
 export const VIEWER_LAST_SESSION_KEY = "watchflow:last-session:v1";
+export const VIEWER_HISTORY_KEY = "watchflow:watch-history:v1";
 
 export const defaultViewerProfile: ViewerProfile = {
   version: 2,
@@ -29,7 +33,8 @@ export const defaultViewerProfile: ViewerProfile = {
   audioFriendly: false,
   antiClickbait: true,
   useSubscriptions: true,
-  useLikedVideos: true
+  useLikedVideos: true,
+  useWatchHistory: false
 };
 
 function storageAvailable() {
@@ -70,7 +75,8 @@ function normalizeProfile(value: unknown): ViewerProfile | null {
     audioFriendly: profile.audioFriendly ?? defaultViewerProfile.audioFriendly,
     antiClickbait: profile.antiClickbait ?? defaultViewerProfile.antiClickbait,
     useSubscriptions: profile.useSubscriptions ?? defaultViewerProfile.useSubscriptions,
-    useLikedVideos: profile.useLikedVideos ?? defaultViewerProfile.useLikedVideos
+    useLikedVideos: profile.useLikedVideos ?? defaultViewerProfile.useLikedVideos,
+    useWatchHistory: profile.useWatchHistory ?? defaultViewerProfile.useWatchHistory
   };
 }
 
@@ -80,6 +86,7 @@ function normalizeRequest(request: Partial<RecommendationSessionRequest> | undef
     ...request,
     timeLimitEnabled: request.timeLimitEnabled ?? true,
     recommendationMode: request.recommendationMode ?? "session",
+    resultCount: (request.resultCount ?? (request.recommendationMode === "single" ? 5 : 3)) as ResultCount,
     maxAgeMonths: request.maxAgeMonths === undefined ? 12 : request.maxAgeMonths
   } as RecommendationSessionRequest;
 }
@@ -90,7 +97,7 @@ export async function getViewerProfile(): Promise<ViewerProfile> {
     const stored = window.localStorage.getItem(VIEWER_PROFILE_KEY) ?? window.localStorage.getItem(LEGACY_VIEWER_PROFILE_KEY);
     if (!stored) return { ...defaultViewerProfile };
     const parsed: unknown = JSON.parse(stored);
-    const normalized = isViewerProfile(parsed) ? parsed : normalizeProfile(parsed);
+    const normalized = normalizeProfile(parsed);
     if (normalized) window.localStorage.setItem(VIEWER_PROFILE_KEY, JSON.stringify(normalized));
     return normalized ?? { ...defaultViewerProfile };
   } catch {
@@ -157,13 +164,37 @@ export async function getViewerSignals(_connected: boolean, profile: ViewerProfi
       state: profile.useLikedVideos ? "available" : "disabled",
       detail: profile.useLikedVideos ? pending : "Disabled in your taste profile."
     },
-    watchHistory: { state: "unavailable", detail: "YouTube does not expose watch history through the Data API." },
+    watchHistory: { state: "available", count: 0, importedAt: null, detail: "Import a Google Takeout file if you want to use watch history." },
     watchLater: { state: "unavailable", detail: "YouTube does not expose Watch Later items through the Data API." }
   };
 }
 
 export async function getLiveViewerSignals() {
   return apiRequest<ViewerSignalsSummary>("/api/viewer/signals");
+}
+
+export async function getWatchHistory(mode: "demo" | "live") {
+  if (mode === "live") return apiRequest<WatchHistorySummary & { items: WatchHistoryImportItem[] }>("/api/viewer/history");
+  if (!storageAvailable()) return { count: 0, importedAt: null, items: [] };
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(VIEWER_HISTORY_KEY) ?? "null") as { items?: WatchHistoryImportItem[]; importedAt?: string } | null;
+    const items = parsed?.items ?? [];
+    return { count: items.length, importedAt: parsed?.importedAt ?? null, items };
+  } catch {
+    return { count: 0, importedAt: null, items: [] };
+  }
+}
+
+export async function importWatchHistory(items: WatchHistoryImportItem[], mode: "demo" | "live") {
+  if (mode === "live") return apiRequest<WatchHistorySummary>("/api/viewer/history/import", { method: "POST", body: JSON.stringify({ items }) });
+  const importedAt = new Date().toISOString();
+  if (storageAvailable()) window.localStorage.setItem(VIEWER_HISTORY_KEY, JSON.stringify({ items, importedAt }));
+  return { count: items.length, importedAt };
+}
+
+export async function clearWatchHistory(mode: "demo" | "live") {
+  if (mode === "live") return apiRequest<void>("/api/viewer/history", { method: "DELETE" });
+  if (storageAvailable()) window.localStorage.removeItem(VIEWER_HISTORY_KEY);
 }
 
 export async function requestLiveSync(force = false) {
@@ -173,13 +204,14 @@ export async function requestLiveSync(force = false) {
 export async function createRecommendationSession(
   request: RecommendationSessionRequest,
   profile: ViewerProfile,
-  mode: "demo" | "live" = "demo"
+  mode: "demo" | "live" = "demo",
+  historyItems: WatchHistoryImportItem[] = []
 ): Promise<RecommendationSessionResponse> {
   if (mode === "live") {
     return apiRequest<RecommendationSessionResponse>("/api/recommendations/session", { method: "POST", body: JSON.stringify(request) });
   }
   await new Promise((resolve) => window.setTimeout(resolve, 450));
-  return createDemoSession(request, profile);
+  return createDemoSession(request, profile, undefined, [], 1, undefined, historyItems);
 }
 
 export async function getSessionDraft(mode: "demo" | "live") {
@@ -233,12 +265,12 @@ export function saveLatestRecommendationSession(session: RecommendationSessionRe
   if (storageAvailable() && session.mode === "demo") window.localStorage.setItem(VIEWER_LAST_SESSION_KEY, JSON.stringify(session));
 }
 
-export async function createNextRecommendationSession(session: RecommendationSessionResponse, profile: ViewerProfile) {
+export async function createNextRecommendationSession(session: RecommendationSessionResponse, profile: ViewerProfile, historyItems: WatchHistoryImportItem[] = []) {
   if (session.mode === "live") {
     return apiRequest<RecommendationSessionResponse>(`/api/recommendations/session/${encodeURIComponent(session.sessionId)}/next`, { method: "POST" });
   }
   await new Promise((resolve) => window.setTimeout(resolve, 350));
-  return createDemoSession(session.request, profile, undefined, session.seenVideoIds, session.page + 1, session.chainId);
+  return createDemoSession(session.request, profile, undefined, session.seenVideoIds, session.page + 1, session.chainId, historyItems);
 }
 
 export async function getQueue(sort: QueueSort = "saved_newest") {

@@ -42,7 +42,7 @@ databaseTest("PostgreSQL repositories", () => {
       data: { id: videoId, channelId, title: "Test video", durationSeconds: 120, tags: [], format: "short", topics: ["technology"], intents: ["learn"] }
     });
     const draftRequest = {
-      minutes: 30, timeLimitEnabled: false, recommendationMode: "single", intent: "relax", source: "mixed",
+      minutes: 30, timeLimitEnabled: false, recommendationMode: "single", resultCount: 5, intent: "relax", source: "mixed",
       topics: [], formats: ["standard"], languages: ["en"], maxAgeMonths: 12, audioFriendly: false, antiClickbait: true
     };
     await db.viewerSessionDraft.create({ data: { userId, request: draftRequest } });

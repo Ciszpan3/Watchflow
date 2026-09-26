@@ -28,6 +28,7 @@ const request: RecommendationSessionRequest = {
   minutes: 30,
   timeLimitEnabled: false,
   recommendationMode: "single",
+  resultCount: 5,
   intent: "relax",
   source: "mixed",
   topics: [],
@@ -89,7 +90,7 @@ describe("viewer profile adapter", () => {
     expect(signals.connected).toBe(false);
     expect(signals.subscriptions.state).toBe("available");
     expect(signals.likedVideos.detail).toContain("not active");
-    expect(signals.watchHistory.state).toBe("unavailable");
+    expect(signals.watchHistory.state).toBe("available");
     expect(signals.watchLater.state).toBe("unavailable");
   });
 

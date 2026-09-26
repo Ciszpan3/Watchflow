@@ -30,7 +30,8 @@ export function profileCreateData(profile: ViewerProfileInput = defaultProfile) 
     audioFriendly: profile.audioFriendly,
     antiClickbait: profile.antiClickbait,
     useSubscriptions: profile.useSubscriptions,
-    useLikedVideos: profile.useLikedVideos
+    useLikedVideos: profile.useLikedVideos,
+    useWatchHistory: profile.useWatchHistory
   };
 }
 
@@ -47,7 +48,8 @@ export function serializeProfile(profile: ViewerProfile): ViewerProfileInput {
     audioFriendly: profile.audioFriendly,
     antiClickbait: profile.antiClickbait,
     useSubscriptions: profile.useSubscriptions,
-    useLikedVideos: profile.useLikedVideos
+    useLikedVideos: profile.useLikedVideos,
+    useWatchHistory: profile.useWatchHistory
   };
 }
 
