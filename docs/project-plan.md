@@ -16,11 +16,11 @@ Watchflow pomaga widzowi świadomie wybrać film pasujący do czasu, intencji i 
 - Po zalogowaniu profil z PostgreSQL jest źródłem prawdy. Lokalny profil może zostać przeniesiony tylko raz, gdy konto nie ma jeszcze własnych ustawień.
 - Szkic filtrów oraz ostatni zestaw rekomendacji są przywracane po odświeżeniu. Konto live przechowuje je w PostgreSQL, a demo w wersjonowanych kluczach `localStorage`.
 - Avatar Google jest pobierany wyłącznie z zaufanego hosta HTTPS, ograniczony do 1 MB i cache'owany w bazie. Interfejs używa inicjałów, gdy obraz jest niedostępny.
-- Historia oglądania może zostać zaimportowana z `watch-history.json` pobranego przez Google Takeout. Plik jest parsowany w przeglądarce, do backendu trafia maksymalnie 5000 znormalizowanych wpisów, a użytkownik osobno włącza lub wyłącza ten sygnał w profilu. Historia nie jest pobierana przez YouTube Data API.
+- Historia oglądania może zostać zaimportowana z `watch-history.json` pobranego przez Google Takeout. Plik jest parsowany w przeglądarce, do backendu trafia maksymalnie 5000 znormalizowanych wpisów, import automatycznie włącza ten sygnał, a użytkownik może go później wyłączyć w profilu. Historia nie jest pobierana przez YouTube Data API.
 
 ## Sygnały i synchronizacja
 
-Synchronizacja pobiera wszystkie dostępne subskrypcje, maksymalnie 200 ostatnich polubionych filmów oraz po 15 ostatnich materiałów z maksymalnie 40 kanałów. Najpierw wybiera kanały występujące w polubieniach, a pozostałe rotuje między synchronizacjami. Kandydaci z subskrypcji są przechowywani przez 30 dni, więc kolejne synchronizacje budują pulę materiałów zamiast usuwać ją po sześciu godzinach.
+Synchronizacja pobiera wszystkie dostępne subskrypcje, maksymalnie 200 ostatnich polubionych filmów oraz po maksymalnie 50 ostatnich materiałów z maksymalnie 60 kanałów w jednym przebiegu. Najpierw wybiera kanały, dla których YouTube zgłasza nowe publikacje, następnie kanały występujące w polubieniach, a pozostałe rotuje między synchronizacjami. Limity można zmienić przez `SUBSCRIPTION_CHANNEL_LIMIT` i `SUBSCRIPTION_VIDEOS_PER_CHANNEL`, przy czym API YouTube ogranicza pojedynczą stronę playlisty do 50 pozycji. Kandydaci z subskrypcji są przechowywani przez 30 dni, więc kolejne synchronizacje budują pulę materiałów zamiast usuwać ją po sześciu godzinach.
 
 Import ma ograniczoną równoległość, limit czasu dla pojedynczych żądań YouTube oraz limit całego zadania. Przerwany proces nie może pozostawić użytkownika z trwałym stanem `RUNNING`: przy następnym uruchomieniu backend oznacza takie zadania jako nieudane i pozwala wykonać ponowną próbę.
 

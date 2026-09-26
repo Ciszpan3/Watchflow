@@ -19,6 +19,8 @@ export const env = {
   syncCooldownMinutes: Number(process.env.SYNC_COOLDOWN_MINUTES ?? 15),
   syncJobTimeoutMinutes: Number(process.env.SYNC_JOB_TIMEOUT_MINUTES ?? 5),
   syncConcurrency: Number(process.env.SYNC_CONCURRENCY ?? 5),
+  subscriptionChannelLimit: Number(process.env.SUBSCRIPTION_CHANNEL_LIMIT ?? 60),
+  subscriptionVideosPerChannel: Number(process.env.SUBSCRIPTION_VIDEOS_PER_CHANNEL ?? 50),
   youtubeRequestTimeoutMs: Number(process.env.YOUTUBE_REQUEST_TIMEOUT_MS ?? 15_000),
   searchCacheHours: Number(process.env.SEARCH_CACHE_HOURS ?? 12),
   searchDailyLimit: Number(process.env.SEARCH_DAILY_LIMIT ?? 80),

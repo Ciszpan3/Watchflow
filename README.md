@@ -9,7 +9,7 @@ Projekt jest pełnostackową aplikacją portfolio: łączy bezpieczne Google OAu
 - logowanie Google i trwała sesja w cookie `HttpOnly`;
 - szyfrowanie refresh tokenów AES-256-GCM wyłącznie na backendzie;
 - trwały profil zainteresowań i onboarding w PostgreSQL;
-- synchronizacja subskrypcji, maksymalnie 200 polubień oraz 15 ostatnich filmów z wybranych subskrybowanych kanałów;
+- synchronizacja subskrypcji, maksymalnie 200 polubień oraz do 50 ostatnich filmów z maksymalnie 60 kanałów na przebieg; kanały z nowymi publikacjami są sprawdzane jako pierwsze, a pozostałe rotują;
 - wyszukiwanie nowych twórców z 12-godzinnym cache i dziennym limitem bezpieczeństwa;
 - pobieranie do 50 wyników wyszukiwania na język oraz filtr kategorii YouTube dla Gaming, aby ograniczyć przypadkowe dopasowania z tytułów;
 - rozszerzona klasyfikacja tematów korzystająca także z nazwy i opisu kanału, dzięki czemu kanał poświęcony transformacji sylwetki może pasować do `Health & fitness`;

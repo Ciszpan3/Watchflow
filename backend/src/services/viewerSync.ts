@@ -8,6 +8,7 @@ import { subscriptionCandidateExpiration } from "./recommendations.js";
 const runningJobs = new Map<string, Promise<void>>();
 
 type SyncError = Error & { code?: string };
+type SubscriptionSignal = { channelId: string; newItemCount: number };
 
 export async function mapWithConcurrency<T, R>(
   values: T[],
@@ -51,7 +52,7 @@ function shouldAbortSync(error: unknown) {
 }
 
 async function fetchSubscriptions(youtube: youtube_v3.Youtube, assertActive: () => void) {
-  const channelIds: string[] = [];
+  const subscriptions = new Map<string, number>();
   let pageToken: string | undefined;
   do {
     assertActive();
@@ -63,11 +64,14 @@ async function fetchSubscriptions(youtube: youtube_v3.Youtube, assertActive: () 
     }, { timeout: env.youtubeRequestTimeoutMs });
     for (const item of response.data.items ?? []) {
       const channelId = item.snippet?.resourceId?.channelId;
-      if (channelId) channelIds.push(channelId);
+      if (channelId) subscriptions.set(channelId, Math.max(
+        subscriptions.get(channelId) ?? 0,
+        Number(item.contentDetails?.newItemCount ?? 0)
+      ));
     }
     pageToken = response.data.nextPageToken ?? undefined;
   } while (pageToken);
-  return [...new Set(channelIds)];
+  return [...subscriptions.entries()].map(([channelId, newItemCount]) => ({ channelId, newItemCount }));
 }
 
 async function fetchLikedVideos(youtube: youtube_v3.Youtube, assertActive: () => void) {
@@ -92,6 +96,30 @@ function rotate<T>(values: T[], start: number, limit: number) {
   return Array.from({ length: Math.min(limit, values.length) }, (_, index) => values[(start + index) % values.length]);
 }
 
+export function selectSubscriptionChannels(
+  subscriptions: SubscriptionSignal[],
+  likedChannelIds: Set<string>,
+  cursor: number,
+  requestedLimit: number
+) {
+  const limit = Math.min(subscriptions.length, Math.max(1, Math.floor(requestedLimit) || 1));
+  const recent = [...subscriptions]
+    .filter((item) => item.newItemCount > 0)
+    .sort((left, right) => right.newItemCount - left.newItemCount)
+    .map((item) => item.channelId);
+  const recentSet = new Set(recent);
+  const liked = subscriptions
+    .map((item) => item.channelId)
+    .filter((channelId) => likedChannelIds.has(channelId) && !recentSet.has(channelId));
+  const preferredSet = new Set([...recent, ...liked]);
+  const remaining = subscriptions.map((item) => item.channelId).filter((channelId) => !preferredSet.has(channelId));
+  return [...new Set([...recent, ...liked, ...rotate(remaining, cursor, limit)])].slice(0, limit);
+}
+
+export function subscriptionUploadPageSize(requestedSize: number) {
+  return Math.min(50, Math.max(1, Math.floor(requestedSize) || 1));
+}
+
 function chunksOf<T>(values: T[], size: number) {
   return Array.from({ length: Math.ceil(values.length / size) }, (_, index) => values.slice(index * size, (index + 1) * size));
 }
@@ -103,7 +131,8 @@ async function runSync(userId: string, jobId: string) {
   try {
     await db.syncJob.update({ where: { id: jobId }, data: { status: SyncStatus.RUNNING, phase: "subscriptions" } });
     const youtube = await youtubeForUser(userId);
-    const channelIds = await fetchSubscriptions(youtube, assertActive);
+    const subscriptionSignals = await fetchSubscriptions(youtube, assertActive);
+    const channelIds = subscriptionSignals.map((item) => item.channelId);
     await db.syncJob.update({ where: { id: jobId }, data: { phase: "subscription_channels" } });
     const channelPages = await mapWithConcurrency(chunksOf(channelIds, 50), env.syncConcurrency, async (channelBatch) => {
       assertActive();
@@ -140,9 +169,8 @@ async function runSync(userId: string, jobId: string) {
     await db.syncJob.update({ where: { id: jobId }, data: { likedVideosCount: likedVideoIds.length, phase: "recent_videos" } });
 
     const account = await db.googleAccount.findUniqueOrThrow({ where: { userId } });
-    const preferred = validChannelIds.filter((id) => likedChannelIds.has(id));
-    const remaining = validChannelIds.filter((id) => !likedChannelIds.has(id));
-    const selectedIds = [...preferred.slice(0, 20), ...rotate(remaining, account.syncCursor, 40 - Math.min(20, preferred.length))].slice(0, 40);
+    const availableSubscriptions = subscriptionSignals.filter((item) => validChannelIds.includes(item.channelId));
+    const selectedIds = selectSubscriptionChannels(availableSubscriptions, likedChannelIds, account.syncCursor, env.subscriptionChannelLimit);
     const selectedChannels = channels.filter((channel) => channel.id && selectedIds.includes(channel.id));
     const uploadVideoIdsByChannel = await mapWithConcurrency(selectedChannels, env.syncConcurrency, async (channel) => {
       assertActive();
@@ -152,7 +180,7 @@ async function runSync(userId: string, jobId: string) {
         const response = await youtube.playlistItems.list({
           playlistId,
           part: ["contentDetails"],
-          maxResults: 15
+          maxResults: subscriptionUploadPageSize(env.subscriptionVideosPerChannel)
         }, { timeout: env.youtubeRequestTimeoutMs });
         return (response.data.items ?? [])
           .map((item) => item.contentDetails?.videoId)

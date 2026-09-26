@@ -159,7 +159,7 @@ Zgoda albo refresh token wygasły. Kliknij **Reconnect YouTube**. Profil, kolejk
 
 Standardowo pierwsza synchronizacja może potrwać od kilkunastu sekund do kilku minut, zależnie od liczby subskrypcji i odpowiedzi YouTube. Po pięciu minutach zadanie kończy się czytelnym błędem zamiast pozostawać w stanie aktywnym bez końca. Po restarcie backendu przerwane zadanie także zostaje zwolnione automatycznie. Użyj przycisku **Retry sync**, aby rozpocząć nową próbę.
 
-Limity można dostosować w `backend/.env` przez `YOUTUBE_REQUEST_TIMEOUT_MS`, `SYNC_JOB_TIMEOUT_MINUTES` i `SYNC_CONCURRENCY`. Zwiększanie równoległości ponad wartość domyślną `5` nie jest zalecane bez sprawdzenia limitów i stabilności API.
+Limity można dostosować w `backend/.env` przez `YOUTUBE_REQUEST_TIMEOUT_MS`, `SYNC_JOB_TIMEOUT_MINUTES`, `SYNC_CONCURRENCY`, `SUBSCRIPTION_CHANNEL_LIMIT` i `SUBSCRIPTION_VIDEOS_PER_CHANNEL`. Ostatnia wartość nie może skutecznie przekroczyć `50`, ponieważ taki limit ma pojedyncze wywołanie playlisty YouTube. Zwiększanie równoległości ponad wartość domyślną `5` nie jest zalecane bez sprawdzenia limitów i stabilności API.
 
 ### Błąd połączenia z PostgreSQL
 
