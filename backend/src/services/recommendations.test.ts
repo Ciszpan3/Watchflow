@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { fitTier, freshnessForVideo, freshnessReason, isPopularNewCreator, searchCacheKey, subscriptionCandidateExpiration, youtubeSearchParameters } from "./recommendations.js";
+import { fitTier, freshnessForVideo, freshnessReason, historyTermsForSearch, isPopularNewCreator, searchCacheKey, subscriptionCandidateExpiration, youtubeSearchParameters } from "./recommendations.js";
 
 const now = new Date("2026-09-20T12:00:00.000Z");
 
@@ -59,5 +59,16 @@ describe("recommendation freshness", () => {
   it("keeps subscription candidates available longer than a sync cache", () => {
     const start = new Date("2026-09-20T12:00:00.000Z");
     expect(subscriptionCandidateExpiration(start).getTime() - start.getTime()).toBe(30 * 86_400_000);
+  });
+
+  it("builds new-creator search terms from relevant imported history", () => {
+    expect(historyTermsForSearch([
+      { title: "Minecraft survival building", channelTitle: "Block Lab", topics: ["gaming"] },
+      { title: "Minecraft redstone ideas", channelTitle: "Block Lab", topics: ["gaming"] },
+      { title: "GTA money guide", channelTitle: "Random GTA", topics: ["gaming"] }
+    ], ["gaming"])).toContain("minecraft");
+    expect(historyTermsForSearch([
+      { title: "Minecraft survival building", channelTitle: "Block Lab", topics: ["gaming"] }
+    ], ["finance"])).toEqual([]);
   });
 });

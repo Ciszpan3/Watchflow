@@ -120,9 +120,17 @@ h1, h2, h3, p { margin-top: 0; }
 .time-options button:hover, .time-options button.selected { color: var(--text); border-color: #5d353a; background: #25171a; }
 .time-options button.selected { box-shadow: inset 0 -2px 0 var(--red); }
 .time-control-header { display: flex; align-items: stretch; justify-content: space-between; gap: 12px; }
-.result-count-picker { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 13px; padding-top: 12px; border-top: 1px solid var(--border); color: var(--muted); font-size: 10px; }
-.result-count-picker .mode-segment { min-width: 150px; }
-.result-count-picker .mode-segment button { min-width: 42px; padding: 7px 10px; }
+.result-count-picker { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 13px; padding-top: 12px; border-top: 1px solid var(--border); color: var(--muted); font-size: 10px; }
+.result-count-label { display: grid; gap: 3px; min-width: 0; }
+.result-count-label strong { color: #d4d4d8; font-size: 10px; }
+.result-count-label small { color: var(--subtle); font-size: 8px; }
+.result-count-options { display: grid; grid-template-columns: repeat(3, minmax(76px, 1fr)); gap: 4px; min-width: 250px; padding: 3px; border: 1px solid var(--border); border-radius: 7px; background: #101013; }
+.result-count-options button { display: grid; place-items: center; min-height: 45px; gap: 2px; padding: 4px 7px; border: 0; border-radius: 5px; color: var(--muted); background: transparent; cursor: pointer; }
+.result-count-options button strong { color: var(--text); font-size: 12px; line-height: 1; }
+.result-count-options button small { color: var(--subtle); font-size: 7px; white-space: nowrap; }
+.result-count-options button:hover { background: #1a1a1f; }
+.result-count-options button.selected { color: #fff; background: #2a1a1e; box-shadow: inset 0 0 0 1px #6d3a43; }
+.result-count-options button.selected small { color: #f2aeb7; }
 .mode-segment { display: grid; grid-template-columns: repeat(2, minmax(130px, 1fr)); padding: 3px; border: 1px solid var(--border); border-radius: 7px; background: #101013; }
 .mode-segment button { display: inline-flex; align-items: center; justify-content: center; min-height: 38px; gap: 7px; padding: 0 12px; border: 0; border-radius: 5px; color: var(--muted); background: transparent; cursor: pointer; font-size: 10px; font-weight: 750; }
 .mode-segment button svg { width: 15px; }
@@ -359,7 +367,7 @@ input[type="range"] { width: 100%; height: 4px; margin: 2px 0; accent-color: var
   .composer-status { align-items: flex-end; flex-direction: column; }
   .time-control-header { align-items: stretch; flex-direction: column; }
   .result-count-picker { align-items: stretch; flex-direction: column; }
-  .result-count-picker .mode-segment { width: 100%; }
+  .result-count-options { width: 100%; min-width: 0; }
   .mode-segment { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .time-limit-toggle { min-width: 0; }
   .time-picker { grid-template-columns: 1fr 98px; }

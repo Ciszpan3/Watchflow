@@ -42,7 +42,7 @@ Ranking korzysta z następujących sygnałów:
 - popularność i proporcja polubień wzmacniają odkrywanie nowych twórców, a domyślny próg 10 000 wyświetleń odrzuca przypadkowe materiały o minimalnym ruchu;
 - wybrana intencja zmienia słowa wyszukiwania oraz ranking, np. `Solve a problem` preferuje poradniki i instrukcje, a `Keep me company` rozmowy i podcasty.
 
-Zaimportowana historia nie jest traktowana jako luźny tag przypięty do każdego filmu z tej samej kategorii. Dla każdego kandydata sprawdzane są konkretne sygnały: zgodność kanału, podobieństwo istotnych słów tytułu oraz wspólne tematy z wpisami historii. Komunikat o historii pojawia się dopiero przy rzeczywistym dopasowaniu. Historia wpływa na ranking tylko po włączeniu jej w profilu i nie zastępuje wybranego tematu sesji.
+Zaimportowana historia nie jest traktowana jako luźny tag przypięty do każdego filmu z tej samej kategorii. Po imporcie sygnał jest automatycznie włączany, a użytkownik może go później wyłączyć w profilu. Dla każdego kandydata sprawdzane są konkretne sygnały: zgodność kanału, podobieństwo istotnych słów tytułu oraz wspólne tematy z wpisami historii. Przy odkrywaniu nowych twórców, gdy historia zawiera wpisy z wybranego tematu, kandydat musi mieć przynajmniej jeden konkretny wspólny sygnał z historią; sama szeroka kategoria, np. `Gaming`, nie wystarcza. Komunikat o historii pojawia się dopiero przy rzeczywistym dopasowaniu. Historia nie zastępuje wybranego tematu sesji.
 
 Wynik liczbowy służy wyłącznie do sortowania. Interfejs pokazuje `Excellent fit`, `Strong fit`, `Good fit` albo `Exploratory pick` oraz maksymalnie trzy rzeczywiste sygnały. Nie są używane suwaki głębokości, tempa ani znajomości, których nie da się wiarygodnie wyprowadzić z metadanych YouTube.
 

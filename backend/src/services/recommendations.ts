@@ -75,12 +75,15 @@ export function youtubeSearchParameters(query: string, language: string, maxAgeM
   };
 }
 
-async function searchNewVideos(userId: string, request: RecommendationRequest, profile: ViewerProfileInput) {
+type WatchHistorySignal = { title: string; channelTitle: string | null; topics: string[]; watchedAt?: Date };
+
+async function searchNewVideos(userId: string, request: RecommendationRequest, profile: ViewerProfileInput, historyRows: WatchHistorySignal[]) {
   const topics = (request.topics.length ? request.topics : [...profile.interests, ...profile.customTopics]).slice(0, 2);
   const languages = request.languages.slice(0, 2);
   const subscriptions = await db.subscription.findMany({ where: { userId }, select: { channelId: true } });
   const subscribedChannels = new Set(subscriptions.map((item) => item.channelId));
   const categoryId = topics.includes("gaming") ? "20" : undefined;
+  const historyTerms = profile.useWatchHistory ? historyTermsForSearch(historyRows, topics) : [];
   let quotaLimited = false;
 
   async function saveSearchCandidates(videoIds: string[]) {
@@ -102,8 +105,8 @@ async function searchNewVideos(userId: string, request: RecommendationRequest, p
   }
 
   for (const language of languages) {
-    const queryTerms = topics.flatMap(topicSearchTerms).slice(0, 10);
-    const query = `${queryTerms.join("|") || "interesting documentary"} ${intentSearchTerms[request.intent].join("|")}`.trim();
+    const queryTerms = topics.flatMap(topicSearchTerms).slice(0, 6);
+    const query = `${queryTerms.join(" ")} ${historyTerms.join(" ")} ${intentSearchTerms[request.intent].slice(0, 2).join(" ")}`.trim() || "interesting documentary";
     const key = searchCacheKey(query, language, request.formats.length === 1 ? request.formats[0] : undefined, request.maxAgeMonths, categoryId);
     const cached = await db.searchCache.findUnique({ where: { cacheKey: key } });
     let ids = cached && cached.expiresAt > new Date() ? cached.videoIds : [];
@@ -277,13 +280,26 @@ function titleWords(value: string) {
   return new Set(value.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((word) => word.length >= 4 && !historyStopWords.has(word)));
 }
 
-function historyAffinity(video: Video & { channel: Channel }, candidateTopics: string[], rows: Array<{ title: string; channelTitle: string | null; topics: string[] }>) {
+export function historyTermsForSearch(rows: WatchHistorySignal[], requestedTopics: string[]) {
+  const counts = new Map<string, number>();
+  const relevantRows = rows.filter((row) => !requestedTopics.length || overlap(row.topics, requestedTopics).length > 0);
+  for (const row of relevantRows) {
+    for (const word of titleWords(`${row.title} ${row.channelTitle ?? ""}`)) counts.set(word, (counts.get(word) ?? 0) + 1);
+  }
+  const ranked = [...counts.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .map(([word]) => word);
+  const repeated = ranked.filter((word) => (counts.get(word) ?? 0) >= 2);
+  return (repeated.length ? repeated : ranked).slice(0, 4);
+}
+
+function historyAffinity(video: Video & { channel: Channel }, candidateTopics: string[], rows: WatchHistorySignal[]) {
   if (!rows.length) return { score: 0, matched: false };
   const videoWords = titleWords(`${video.title} ${video.channel.title}`);
   let best = 0;
   for (const row of rows) {
     const sameChannel = Boolean(row.channelTitle && row.channelTitle.toLowerCase() === video.channel.title.toLowerCase());
-    const sharedWords = [...titleWords(row.title)].filter((word) => videoWords.has(word));
+    const sharedWords = [...titleWords(`${row.title} ${row.channelTitle ?? ""}`)].filter((word) => videoWords.has(word));
     const sharedTopics = overlap(candidateTopics, row.topics);
     const score = (sameChannel ? 16 : 0) + Math.min(10, sharedWords.length * 5) + Math.min(6, sharedTopics.length * 3);
     best = Math.max(best, score);
@@ -384,16 +400,16 @@ function sessionResponse(session: {
 export async function buildLiveSession(userId: string, request: RecommendationRequest, options: BuildSessionOptions = {}) {
   const storedProfile = await db.viewerProfile.findUniqueOrThrow({ where: { userId } });
   const profile = serializeProfile(storedProfile);
+  const historyRows = await db.watchHistoryItem.findMany({ where: { userId }, orderBy: { watchedAt: "desc" }, take: 5000 });
   let quotaLimited = false;
-  if (request.source !== "subscribed") quotaLimited = await searchNewVideos(userId, request, profile);
+  if (request.source !== "subscribed") quotaLimited = await searchNewVideos(userId, request, profile, historyRows);
 
-  const [candidateRows, likedRows, feedbackRows, activityRows, savedRows, historyRows] = await Promise.all([
+  const [candidateRows, likedRows, feedbackRows, activityRows, savedRows] = await Promise.all([
     db.userVideoCandidate.findMany({ where: { userId, expiresAt: { gt: new Date() } }, include: { video: { include: { channel: true } } } }),
     db.likedVideo.findMany({ where: { userId }, include: { video: true } }),
     db.recommendationFeedback.findMany({ where: { userId }, include: { video: true } }),
     db.viewingActivity.findMany({ where: { userId, createdAt: { gt: new Date(Date.now() - 90 * 86_400_000) } }, include: { video: true } }),
-    db.savedVideo.findMany({ where: { userId }, include: { video: true } }),
-    db.watchHistoryItem.findMany({ where: { userId }, orderBy: { watchedAt: "desc" }, take: 5000 })
+    db.savedVideo.findMany({ where: { userId }, include: { video: true } })
   ]);
   const candidates: Candidate[] = candidateRows.map((row) => ({ source: row.source, video: row.video }));
   const requestedTopics = request.topics.length ? request.topics : [...profile.interests, ...profile.customTopics];
@@ -417,6 +433,11 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
     const video = candidate.video;
     const topics = effectiveTopics(video);
     const freshness = freshnessForVideo(video.publishedAt, request.maxAgeMonths);
+    const history = profile.useWatchHistory ? historyAffinity(video, topics, historyRows) : { score: 0, matched: false };
+    const historyTopicAnchor = profile.useWatchHistory
+      && source === "new"
+      && historyRows.length >= 3
+      && historyRows.some((row) => overlap(row.topics, requestedTopics).length > 0);
     if (excludedVideoIds.has(video.id)) return [];
     if (!freshness.allowed) return [];
     if (request.source !== "mixed" && request.source !== source) return [];
@@ -426,11 +447,11 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
     if (topicCategoryMismatch(video, request.topics.length ? request.topics : requestedTopics)) return [];
     if (overlap(topics, profile.excludedTopics).length) return [];
     if (request.audioFriendly && !video.audioFriendly) return [];
+    if (historyTopicAnchor && !history.matched) return [];
 
     const topicMatches = overlap(topics, requestedTopics);
     const intentScore = video.intents.includes(request.intent) ? 30 : 0;
     const topicScore = topicMatches.length ? 25 : 0;
-    const history = profile.useWatchHistory ? historyAffinity(video, topics, historyRows) : { score: 0, matched: false };
     const affinityRaw = overlap(topics, likedTopics).length * 12
       + (likedChannels.has(video.channelId) ? 28 : 0)
       + overlap(topics, openedTopics).length * 4
