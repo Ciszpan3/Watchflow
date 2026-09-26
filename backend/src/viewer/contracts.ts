@@ -4,9 +4,10 @@ export const formats = ["standard", "short", "live", "podcast"] as const;
 export const languages = ["en", "pl"] as const;
 export const intents = ["learn", "relax", "inspire", "company", "solve", "entertain"] as const;
 export const recommendationModes = ["session", "single"] as const;
+export const maxAgeMonthsOptions = [1, 3, 6, 12, 24] as const;
 
 export type ViewerProfileInput = {
-  version: 1;
+  version: 2;
   status: typeof profileStatuses[number];
   interests: string[];
   customTopics: string[];
@@ -14,9 +15,6 @@ export type ViewerProfileInput = {
   languages: typeof languages[number][];
   formats: typeof formats[number][];
   defaultSource: typeof sources[number];
-  novelty: number;
-  depth: number;
-  pace: number;
   audioFriendly: boolean;
   antiClickbait: boolean;
   useSubscriptions: boolean;
@@ -32,14 +30,13 @@ export type RecommendationRequest = {
   topics: string[];
   formats: typeof formats[number][];
   languages: typeof languages[number][];
-  novelty: number;
-  depth: number;
+  maxAgeMonths: typeof maxAgeMonthsOptions[number] | null;
   audioFriendly: boolean;
   antiClickbait: boolean;
 };
 
 export const defaultProfile: ViewerProfileInput = {
-  version: 1,
+  version: 2,
   status: "not_started",
   interests: ["science", "design", "cooking"],
   customTopics: [],
@@ -47,9 +44,6 @@ export const defaultProfile: ViewerProfileInput = {
   languages: ["en", "pl"],
   formats: ["standard", "short", "live", "podcast"],
   defaultSource: "mixed",
-  novelty: 58,
-  depth: 62,
-  pace: 48,
   audioFriendly: false,
   antiClickbait: true,
   useSubscriptions: true,
@@ -59,7 +53,7 @@ export const defaultProfile: ViewerProfileInput = {
 export function isProfileInput(value: unknown): value is ViewerProfileInput {
   if (!value || typeof value !== "object") return false;
   const profile = value as Partial<ViewerProfileInput>;
-  return profile.version === 1
+  return profile.version === 2
     && profileStatuses.includes(profile.status as never)
     && Array.isArray(profile.interests)
     && Array.isArray(profile.customTopics)
@@ -69,7 +63,6 @@ export function isProfileInput(value: unknown): value is ViewerProfileInput {
     && Array.isArray(profile.formats)
     && profile.formats.every((item) => formats.includes(item as never))
     && sources.includes(profile.defaultSource as never)
-    && [profile.novelty, profile.depth, profile.pace].every((item) => Number.isInteger(item) && Number(item) >= 0 && Number(item) <= 100)
     && [profile.audioFriendly, profile.antiClickbait, profile.useSubscriptions, profile.useLikedVideos].every((item) => typeof item === "boolean");
 }
 
@@ -84,6 +77,6 @@ export function isRecommendationRequest(value: unknown): value is Recommendation
     && Array.isArray(request.topics)
     && Array.isArray(request.formats) && request.formats.length > 0 && request.formats.every((item) => formats.includes(item as never))
     && Array.isArray(request.languages) && request.languages.length > 0 && request.languages.every((item) => languages.includes(item as never))
-    && Number.isFinite(request.novelty) && Number.isFinite(request.depth)
+    && (request.maxAgeMonths === null || maxAgeMonthsOptions.includes(request.maxAgeMonths as never))
     && typeof request.audioFriendly === "boolean" && typeof request.antiClickbait === "boolean";
 }

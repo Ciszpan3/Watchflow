@@ -20,8 +20,7 @@ describe("viewer API contracts", () => {
       topics: ["science"],
       formats: ["standard"],
       languages: ["pl"],
-      novelty: 50,
-      depth: 60,
+      maxAgeMonths: 12,
       audioFriendly: false,
       antiClickbait: true
     };
@@ -31,5 +30,7 @@ describe("viewer API contracts", () => {
     expect(isRecommendationRequest({ ...request, timeLimitEnabled: false })).toBe(true);
     expect(isRecommendationRequest({ ...request, recommendationMode: "feed" })).toBe(false);
     expect(isRecommendationRequest({ ...request, formats: [] })).toBe(false);
+    expect(isRecommendationRequest({ ...request, maxAgeMonths: 18 })).toBe(false);
+    expect(isRecommendationRequest({ ...request, maxAgeMonths: null })).toBe(true);
   });
 });

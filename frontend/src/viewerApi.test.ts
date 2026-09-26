@@ -33,8 +33,7 @@ const request: RecommendationSessionRequest = {
   topics: [],
   formats: ["standard"],
   languages: ["en"],
-  novelty: 50,
-  depth: 50,
+  maxAgeMonths: 12,
   audioFriendly: false,
   antiClickbait: true
 };
@@ -51,7 +50,21 @@ describe("viewer profile adapter", () => {
     const profile = { ...defaultViewerProfile, status: "completed" as const, interests: ["science", "history", "design"] };
     await saveViewerProfile(profile);
     await expect(getViewerProfile()).resolves.toMatchObject(profile);
-    expect(JSON.parse(window.localStorage.getItem(VIEWER_PROFILE_KEY) ?? "{}").version).toBe(1);
+    expect(JSON.parse(window.localStorage.getItem(VIEWER_PROFILE_KEY) ?? "{}").version).toBe(2);
+  });
+
+  it("converts a legacy local profile to v2 without losing useful preferences", async () => {
+    window.localStorage.setItem("watchflow:viewer-profile:v1", JSON.stringify({
+      ...defaultViewerProfile,
+      version: 1,
+      interests: ["gaming", "technology"],
+      novelty: 90,
+      depth: 20,
+      pace: 75
+    }));
+    const profile = await getViewerProfile();
+    expect(profile).toMatchObject({ version: 2, interests: ["gaming", "technology"] });
+    expect(profile).not.toHaveProperty("novelty");
   });
 
   it("falls back safely when stored data is invalid", async () => {
@@ -118,7 +131,7 @@ describe("viewer profile adapter", () => {
     await saveToQueue("abc");
     await sendFeedback("abc", "not_interested");
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      "http://localhost:4000/api/queue",
+      "http://localhost:4000/api/queue?sort=saved_newest",
       "http://localhost:4000/api/queue",
       "http://localhost:4000/api/recommendations/abc/feedback"
     ]);

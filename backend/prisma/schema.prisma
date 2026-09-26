@@ -92,7 +92,7 @@ model AuthSession {
 model ViewerProfile {
   id               String        @id @default(cuid())
   userId           String        @unique
-  version          Int           @default(1)
+  version          Int           @default(2)
   status           ProfileStatus @default(NOT_STARTED)
   interests        String[]
   customTopics     String[]
@@ -100,9 +100,6 @@ model ViewerProfile {
   languages        String[]
   formats          String[]
   defaultSource    String        @default("mixed")
-  novelty          Int           @default(58)
-  depth            Int           @default(62)
-  pace             Int           @default(48)
   audioFriendly    Boolean       @default(false)
   antiClickbait    Boolean       @default(true)
   useSubscriptions Boolean       @default(true)

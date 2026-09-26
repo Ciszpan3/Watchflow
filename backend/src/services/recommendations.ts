@@ -27,22 +27,22 @@ async function reserveSearchCall() {
   return reserved.count === 1;
 }
 
-const freshnessCacheVersion = "freshness-v2";
+const freshnessCacheVersion = "age-control-v3";
 const dayMs = 86_400_000;
 
-export function freshnessCutoffs(now = new Date()) {
-  const recent = new Date(now);
-  recent.setUTCMonth(recent.getUTCMonth() - 24);
-  const subscriptionFallback = new Date(now);
-  subscriptionFallback.setUTCMonth(subscriptionFallback.getUTCMonth() - 36);
-  return { recent, subscriptionFallback };
+function ageCutoff(maxAgeMonths: RecommendationRequest["maxAgeMonths"], now = new Date()) {
+  if (maxAgeMonths === null) return null;
+  const cutoff = new Date(now);
+  cutoff.setUTCMonth(cutoff.getUTCMonth() - maxAgeMonths);
+  return cutoff;
 }
 
-export function searchCacheKey(query: string, language: string, format: string | undefined) {
-  return createHash("sha256").update(`${freshnessCacheVersion}|${query}|${language}|${format ?? "any"}`).digest("hex");
+export function searchCacheKey(query: string, language: string, format: string | undefined, maxAgeMonths: RecommendationRequest["maxAgeMonths"] = 12) {
+  return createHash("sha256").update(`${freshnessCacheVersion}|${maxAgeMonths ?? "any"}|${query}|${language}|${format ?? "any"}`).digest("hex");
 }
 
-export function youtubeSearchParameters(query: string, language: string, now = new Date()) {
+export function youtubeSearchParameters(query: string, language: string, maxAgeMonths: RecommendationRequest["maxAgeMonths"] = 12, now = new Date()) {
+  const cutoff = ageCutoff(maxAgeMonths, now);
   return {
     part: ["snippet"] as "snippet"[],
     q: query,
@@ -52,7 +52,7 @@ export function youtubeSearchParameters(query: string, language: string, now = n
     relevanceLanguage: language,
     safeSearch: "moderate" as const,
     videoEmbeddable: "true" as const,
-    publishedAfter: freshnessCutoffs(now).recent.toISOString()
+    ...(cutoff ? { publishedAfter: cutoff.toISOString() } : {})
   };
 }
 
@@ -65,7 +65,7 @@ async function searchNewVideos(userId: string, request: RecommendationRequest, p
 
   for (const language of languages) {
     const query = `${topics.join("|") || "interesting documentary"} ${request.intent}`.trim();
-    const key = searchCacheKey(query, language, request.formats.length === 1 ? request.formats[0] : undefined);
+    const key = searchCacheKey(query, language, request.formats.length === 1 ? request.formats[0] : undefined, request.maxAgeMonths);
     const cached = await db.searchCache.findUnique({ where: { cacheKey: key } });
     let ids = cached && cached.expiresAt > new Date() ? cached.videoIds : [];
     if (!ids.length) {
@@ -74,7 +74,7 @@ async function searchNewVideos(userId: string, request: RecommendationRequest, p
         continue;
       }
       const youtube = await youtubeForUser(userId);
-      const response = await youtube.search.list(youtubeSearchParameters(query, language), { timeout: env.youtubeRequestTimeoutMs });
+      const response = await youtube.search.list(youtubeSearchParameters(query, language, request.maxAgeMonths), { timeout: env.youtubeRequestTimeoutMs });
       ids = (response.data.items ?? []).map((item) => item.id?.videoId).filter((id): id is string => Boolean(id));
       const details = await videoDetails(youtube, ids);
       ids = [];
@@ -119,7 +119,11 @@ function relativeDate(value: Date | null) {
   return `${Math.round(days / 30)} months ago`;
 }
 
-export function serializeVideo(video: Video & { channel: Channel }, source: "subscribed" | "new", match = 0, reason = "Saved from a previous session.", signals: string[] = []) {
+export function fitTier(score: number) {
+  return score >= 75 ? "excellent" as const : score >= 60 ? "strong" as const : score >= 45 ? "good" as const : "exploratory" as const;
+}
+
+export function serializeVideo(video: Video & { channel: Channel }, source: "subscribed" | "new", score = 0, reason = "Saved from a previous session.", signals: string[] = []) {
   return {
     id: video.id,
     title: video.title,
@@ -128,6 +132,7 @@ export function serializeVideo(video: Video & { channel: Channel }, source: "sub
     duration: Math.max(1, Math.ceil(video.durationSeconds / 60)),
     views: formatViews(video.viewCount),
     published: relativeDate(video.publishedAt),
+    publishedAt: video.publishedAt?.toISOString() ?? null,
     intents: video.intents,
     source,
     channelSubscribed: source === "subscribed",
@@ -135,11 +140,9 @@ export function serializeVideo(video: Video & { channel: Channel }, source: "sub
     language: video.language === "pl" ? "pl" : "en",
     format: video.format,
     likedAffinity: 0,
-    novelty: source === "new" ? 85 : 35,
-    depth: Math.min(100, Math.round(video.durationSeconds / 18)),
     baseReason: reason,
     signals,
-    match,
+    fit: fitTier(score),
     reason,
     recommendationSignals: signals,
     youtubeUrl: `https://www.youtube.com/watch?v=${video.id}`
@@ -158,33 +161,30 @@ type ScoredCandidate = {
   reason: string;
   signals: string[];
   durationMinutes: number;
-  ageFallback: boolean;
 };
 
-export function freshnessForVideo(publishedAt: Date | null, source: "subscribed" | "new", now = new Date()) {
-  if (!publishedAt) return { allowed: false, ageFallback: false, penalty: 0, signal: "Publication date unavailable" };
+export function freshnessForVideo(publishedAt: Date | null, maxAgeMonths: RecommendationRequest["maxAgeMonths"] = 12, now = new Date()) {
+  if (!publishedAt) return { allowed: false, penalty: 0, signal: "Publication date unavailable" };
   const ageDays = Math.max(0, Math.floor((now.getTime() - publishedAt.getTime()) / dayMs));
-  const { recent, subscriptionFallback } = freshnessCutoffs(now);
-  if (source === "new" && publishedAt < recent) return { allowed: false, ageFallback: false, penalty: 0, signal: "Outside the freshness window" };
-  if (source === "subscribed" && publishedAt < subscriptionFallback) return { allowed: false, ageFallback: false, penalty: 0, signal: "Outside the freshness window" };
-  const ageFallback = source === "subscribed" && publishedAt < recent;
-  const penalty = ageFallback ? 18 : ageDays <= 30 ? 0 : ageDays <= 183 ? 2 : ageDays <= 365 ? 5 : 10;
+  const cutoff = ageCutoff(maxAgeMonths, now);
+  if (cutoff && publishedAt < cutoff) return { allowed: false, penalty: 0, signal: "Outside your selected age range" };
+  const penalty = ageDays <= 30 ? 0 : ageDays <= 183 ? 2 : ageDays <= 365 ? 5 : ageDays <= 730 ? 10 : 18;
   const signal = ageDays <= 30 ? "Published this month"
     : ageDays <= 183 ? "Published recently"
       : ageDays <= 365 ? "Published this year"
-        : ageFallback ? "Older subscription fallback" : "Published within 2 years";
-  return { allowed: true, ageFallback, penalty, signal };
+        : ageDays <= 730 ? "Published within 2 years" : "Older video allowed by your filter";
+  return { allowed: true, penalty, signal };
 }
 
-export function freshnessReason(source: "subscribed" | "new", ageFallback: boolean) {
-  if (source === "new") return "A recent perspective beyond your subscriptions";
-  return ageFallback ? "An older fallback from a channel you follow" : "A current upload from a channel you follow";
+export function freshnessReason(source: "subscribed" | "new", signal: string) {
+  const origin = source === "new" ? "A perspective beyond your subscriptions" : "A video from a channel you follow";
+  return `${origin}. ${signal}`;
 }
 
 function normalizeStoredRequest(value: Prisma.JsonValue): RecommendationRequest | null {
   if (isRecommendationRequest(value)) return value;
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const legacy = { ...value, timeLimitEnabled: true, recommendationMode: "session" };
+  const legacy = { ...value, timeLimitEnabled: "timeLimitEnabled" in value ? value.timeLimitEnabled : true, recommendationMode: "recommendationMode" in value ? value.recommendationMode : "session", maxAgeMonths: 12 };
   return isRecommendationRequest(legacy) ? legacy : null;
 }
 
@@ -222,8 +222,7 @@ function selectCandidates(scored: ScoredCandidate[], request: RecommendationRequ
       const singleDistance = (item: ScoredCandidate) => request.recommendationMode === "single" && request.timeLimitEnabled
         ? Math.abs(item.durationMinutes - request.minutes)
         : 0;
-      return Number(left.ageFallback) - Number(right.ageFallback)
-        || (singleDistance(left) - singleDistance(right))
+      return (singleDistance(left) - singleDistance(right))
         || ((right.match - penalty(right)) - (left.match - penalty(left)));
     });
     const next = options.find((item) => {
@@ -309,7 +308,7 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
   const scored = candidates.flatMap((candidate) => {
     const source = candidate.source === VideoSource.SUBSCRIBED ? "subscribed" : "new";
     const video = candidate.video;
-    const freshness = freshnessForVideo(video.publishedAt, source);
+    const freshness = freshnessForVideo(video.publishedAt, request.maxAgeMonths);
     if (excludedVideoIds.has(video.id)) return [];
     if (!freshness.allowed) return [];
     if (request.source !== "mixed" && request.source !== source) return [];
@@ -328,27 +327,21 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
     const affinityScore = profile.useLikedVideos ? Math.min(20, affinityRaw / 5) : 10;
     const durationMinutes = Math.max(1, Math.ceil(video.durationSeconds / 60));
     const durationScore = durationFit(durationMinutes, request);
-    const novelty = source === "new" ? 85 : 35;
-    const depth = Math.min(100, Math.round(video.durationSeconds / 18));
-    const alignment = 1 - ((Math.abs(novelty - request.novelty) + Math.abs(depth - request.depth)) / 200);
-    const preferenceScore = Math.max(0, alignment * 10);
     const feedbackPenalty = overlap(video.topics, dislikedTopics).length * 12
       + (repeatedChannels.has(video.channelId) ? 18 : 0)
       + (avoidLong && durationMinutes > 30 ? 12 : 0)
       + (request.antiClickbait ? video.clickbaitScore * 0.15 : 0);
-    const match = Math.max(35, Math.min(99, Math.round(intentScore + topicScore + affinityScore + durationScore + preferenceScore - feedbackPenalty - freshness.penalty)));
+    const match = Math.max(0, Math.min(90, Math.round(intentScore + topicScore + affinityScore + durationScore - feedbackPenalty - freshness.penalty)));
     const sourceSignal = source === "subscribed" ? "From your subscriptions" : "New creator discovery";
-    const affinitySignal = affinityRaw >= 40 ? "Strong liked-video fit" : "Taste profile match";
-    const topicSignal = topicMatches[0] ? `Matches ${topicMatches[0]}` : `Fits ${request.intent}`;
-    const reason = `${freshnessReason(source, freshness.ageFallback)}. ${affinitySignal}.`;
-    return [{ candidate, match, reason, signals: [sourceSignal, freshness.signal, affinitySignal, topicSignal], durationMinutes, ageFallback: freshness.ageFallback }];
+    const tasteSignal = affinityRaw >= 40 ? "Strong liked-video fit" : topicMatches[0] ? `Matches your ${topicMatches[0]} interest` : null;
+    const intentSignal = video.intents.includes(request.intent) ? `Fits ${request.intent}` : null;
+    const signals = [sourceSignal, freshness.signal, tasteSignal ?? intentSignal].filter((signal): signal is string => Boolean(signal)).slice(0, 3);
+    const reason = `${freshnessReason(source, freshness.signal)}.${tasteSignal ? ` ${tasteSignal}.` : ""}`;
+    return [{ candidate, match, reason, signals, durationMinutes }];
   }).sort((left, right) => right.match - left.match);
 
   const selected = selectCandidates(scored, request);
-  const hasFreshCandidate = candidates.some((candidate) => freshnessForVideo(
-    candidate.video.publishedAt,
-    candidate.source === VideoSource.SUBSCRIBED ? "subscribed" : "new"
-  ).allowed);
+  const hasFreshCandidate = candidates.some((candidate) => freshnessForVideo(candidate.video.publishedAt, request.maxAgeMonths).allowed);
   const totalMinutes = selected.reduce((sum, item) => sum + item.durationMinutes, 0);
   const hasMore = scored.some((item) => !selected.some((picked) => picked.candidate.video.id === item.candidate.video.id));
   const chainId = options.chainId ?? randomUUID();

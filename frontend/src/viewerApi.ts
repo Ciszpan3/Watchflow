@@ -4,18 +4,21 @@ import type {
   AuthSession,
   RecommendationSessionRequest,
   RecommendationSessionResponse,
+  QueueItem,
+  QueueSort,
   ScoredRecommendation,
   ViewerProfile,
   ViewerSignalsSummary
 } from "./viewerTypes";
 
-export const VIEWER_PROFILE_KEY = "watchflow:viewer-profile:v1";
+export const VIEWER_PROFILE_KEY = "watchflow:viewer-profile:v2";
+const LEGACY_VIEWER_PROFILE_KEY = "watchflow:viewer-profile:v1";
 export const VIEWER_PROFILE_MIGRATED_KEY = "watchflow:viewer-profile-migrated:v1";
 export const VIEWER_SESSION_DRAFT_KEY = "watchflow:session-draft:v1";
 export const VIEWER_LAST_SESSION_KEY = "watchflow:last-session:v1";
 
 export const defaultViewerProfile: ViewerProfile = {
-  version: 1,
+  version: 2,
   status: "not_started",
   interests: ["science", "design", "cooking"],
   customTopics: [],
@@ -23,9 +26,6 @@ export const defaultViewerProfile: ViewerProfile = {
   languages: ["en", "pl"],
   formats: ["standard", "short", "live", "podcast"],
   defaultSource: "mixed",
-  novelty: 58,
-  depth: 62,
-  pace: 48,
   audioFriendly: false,
   antiClickbait: true,
   useSubscriptions: true,
@@ -39,7 +39,7 @@ function storageAvailable() {
 function isViewerProfile(value: unknown): value is ViewerProfile {
   if (!value || typeof value !== "object") return false;
   const profile = value as Partial<ViewerProfile>;
-  return profile.version === 1
+  return profile.version === 2
     && typeof profile.status === "string"
     && Array.isArray(profile.interests)
     && Array.isArray(profile.customTopics)
@@ -48,20 +48,58 @@ function isViewerProfile(value: unknown): value is ViewerProfile {
     && Array.isArray(profile.formats);
 }
 
+function normalizeProfile(value: unknown): ViewerProfile | null {
+  if (!value || typeof value !== "object") return null;
+  const profile = value as Partial<ViewerProfile> & { version?: number };
+  if (![1, 2].includes(profile.version ?? 0)
+    || typeof profile.status !== "string"
+    || !Array.isArray(profile.interests)
+    || !Array.isArray(profile.customTopics)
+    || !Array.isArray(profile.excludedTopics)
+    || !Array.isArray(profile.languages)
+    || !Array.isArray(profile.formats)) return null;
+  return {
+    version: 2,
+    status: profile.status as ViewerProfile["status"],
+    interests: profile.interests,
+    customTopics: profile.customTopics,
+    excludedTopics: profile.excludedTopics,
+    languages: profile.languages as ViewerProfile["languages"],
+    formats: profile.formats as ViewerProfile["formats"],
+    defaultSource: profile.defaultSource ?? defaultViewerProfile.defaultSource,
+    audioFriendly: profile.audioFriendly ?? defaultViewerProfile.audioFriendly,
+    antiClickbait: profile.antiClickbait ?? defaultViewerProfile.antiClickbait,
+    useSubscriptions: profile.useSubscriptions ?? defaultViewerProfile.useSubscriptions,
+    useLikedVideos: profile.useLikedVideos ?? defaultViewerProfile.useLikedVideos
+  };
+}
+
+function normalizeRequest(request: Partial<RecommendationSessionRequest> | undefined): RecommendationSessionRequest | null {
+  if (!request) return null;
+  return {
+    ...request,
+    timeLimitEnabled: request.timeLimitEnabled ?? true,
+    recommendationMode: request.recommendationMode ?? "session",
+    maxAgeMonths: request.maxAgeMonths === undefined ? 12 : request.maxAgeMonths
+  } as RecommendationSessionRequest;
+}
+
 export async function getViewerProfile(): Promise<ViewerProfile> {
   if (!storageAvailable()) return { ...defaultViewerProfile };
   try {
-    const stored = window.localStorage.getItem(VIEWER_PROFILE_KEY);
+    const stored = window.localStorage.getItem(VIEWER_PROFILE_KEY) ?? window.localStorage.getItem(LEGACY_VIEWER_PROFILE_KEY);
     if (!stored) return { ...defaultViewerProfile };
     const parsed: unknown = JSON.parse(stored);
-    return isViewerProfile(parsed) ? { ...defaultViewerProfile, ...parsed } : { ...defaultViewerProfile };
+    const normalized = isViewerProfile(parsed) ? parsed : normalizeProfile(parsed);
+    if (normalized) window.localStorage.setItem(VIEWER_PROFILE_KEY, JSON.stringify(normalized));
+    return normalized ?? { ...defaultViewerProfile };
   } catch {
     return { ...defaultViewerProfile };
   }
 }
 
 export async function saveViewerProfile(profile: ViewerProfile): Promise<ViewerProfile> {
-  const normalized = { ...defaultViewerProfile, ...profile, version: 1 as const };
+  const normalized = { ...defaultViewerProfile, ...profile, version: 2 as const };
   if (storageAvailable()) window.localStorage.setItem(VIEWER_PROFILE_KEY, JSON.stringify(normalized));
   return normalized;
 }
@@ -145,11 +183,16 @@ export async function createRecommendationSession(
 }
 
 export async function getSessionDraft(mode: "demo" | "live") {
-  if (mode === "live") return apiRequest<{ request: RecommendationSessionRequest | null; updatedAt: string | null }>("/api/viewer/session-draft");
+  if (mode === "live") {
+    const result = await apiRequest<{ request: RecommendationSessionRequest | null; updatedAt: string | null }>("/api/viewer/session-draft");
+    return { ...result, request: normalizeRequest(result.request ?? undefined) };
+  }
   if (!storageAvailable()) return { request: null, updatedAt: null };
   try {
     const stored = window.localStorage.getItem(VIEWER_SESSION_DRAFT_KEY);
-    return stored ? JSON.parse(stored) as { request: RecommendationSessionRequest; updatedAt: string } : { request: null, updatedAt: null };
+    if (!stored) return { request: null, updatedAt: null };
+    const parsed = JSON.parse(stored) as { request?: Partial<RecommendationSessionRequest>; updatedAt?: string };
+    return { request: normalizeRequest(parsed.request), updatedAt: parsed.updatedAt ?? null };
   } catch {
     return { request: null, updatedAt: null };
   }
@@ -169,7 +212,8 @@ export async function getLatestRecommendationSession(mode: "demo" | "live") {
     const stored = window.localStorage.getItem(VIEWER_LAST_SESSION_KEY);
     if (!stored) return { session: null };
     const parsed = JSON.parse(stored) as RecommendationSessionResponse;
-    const request = { ...parsed.request, timeLimitEnabled: parsed.request?.timeLimitEnabled ?? true, recommendationMode: parsed.request?.recommendationMode ?? "session" };
+    const request = normalizeRequest(parsed.request);
+    if (!request) return { session: null };
     return { session: {
       ...parsed,
       chainId: parsed.chainId ?? `demo-chain-${Date.now()}`,
@@ -197,8 +241,8 @@ export async function createNextRecommendationSession(session: RecommendationSes
   return createDemoSession(session.request, profile, undefined, session.seenVideoIds, session.page + 1, session.chainId);
 }
 
-export async function getQueue() {
-  return apiRequest<{ items: ScoredRecommendation[] }>("/api/queue");
+export async function getQueue(sort: QueueSort = "saved_newest") {
+  return apiRequest<{ items: QueueItem[] }>(`/api/queue?sort=${encodeURIComponent(sort)}`);
 }
 
 export async function saveToQueue(videoId: string) {

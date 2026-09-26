@@ -25,21 +25,23 @@ Import ma ograniczoną równoległość, limit czasu dla pojedynczych żądań Y
 
 Polubienia są sygnałem gustu, a nie osobnym źródłem kandydatów. Historia oglądania i Watch Later pozostają niedostępne przez YouTube Data API.
 
-Nowi twórcy są wyszukiwani maksymalnie dla dwóch języków na sesję. Zapytanie ogranicza publikację do ostatnich 24 miesięcy, zachowując sortowanie według trafności. Wyniki `search.list` są przechowywane przez 12 godzin, a wersja polityki świeżości jest częścią klucza cache. Atomowy licznik zatrzymuje aplikację przy 80 wywołaniach dziennie, pozostawiając margines bezpieczeństwa.
+Nowi twórcy są wyszukiwani maksymalnie dla dwóch języków na sesję. Użytkownik wybiera ścisłe okno publikacji: 30 dni, 3, 6, 12 lub 24 miesiące albo brak limitu; domyślnie obowiązuje 12 miesięcy. Wybrane okno trafia do `publishedAfter` i klucza cache. Przy braku limitu starsze materiały są dozwolone, ale otrzymują karę wieku. Wyniki `search.list` są przechowywane przez 12 godzin. Atomowy licznik zatrzymuje aplikację przy 80 wywołaniach dziennie, pozostawiając margines bezpieczeństwa.
 
 ## Ranking
 
 Ranking jest deterministyczny:
 
-- intencja: 30%;
-- temat: 25%;
-- profil, polubienia i aktywność: 20%;
-- dopasowanie czasu: 15%, gdy limit jest aktywny;
-- głębokość i odkrywanie: 10%.
+- intencja: do 30 punktów;
+- temat: do 25 punktów;
+- profil, polubienia i aktywność: do 20 punktów;
+- dopasowanie czasu: do 15 punktów, gdy limit jest aktywny;
+- świeżość i feedback odejmują punkty od wyniku wewnętrznego.
+
+Wynik liczbowy służy wyłącznie do sortowania. Interfejs pokazuje `Excellent fit`, `Strong fit`, `Good fit` albo `Exploratory pick` oraz maksymalnie trzy rzeczywiste sygnały. Nie są używane suwaki głębokości, tempa ani znajomości, których nie da się wiarygodnie wyprowadzić z metadanych YouTube.
 
 Język i format są filtrami wymaganymi. Wykluczone tematy oraz obejrzane filmy są usuwane. Powtarzające się kanały i tematy otrzymują karę różnorodności. Przy wyłączonym limicie długość nie filtruje ani nie punktuje materiałów. Tryb sesji zwraca do trzech filmów, a tryb pojedynczego filmu pięć alternatyw preferujących długość w zakresie ±20% wskazanego czasu, co najmniej ±5 minut.
 
-Świeżość działa jako deterministyczna kara rankingu. Nowi twórcy starsi niż 24 miesiące są odrzucani. Materiały z subskrypcji od 24 do 36 miesięcy mogą pojawić się wyłącznie jako awaryjne uzupełnienie, a starsze są odrzucane.
+Wybrany limit wieku jest ścisłym filtrem dla obu źródeł. Aplikacja nie uzupełnia zestawu starszymi materiałami. Opcja bez limitu usuwa granicę, lecz zachowuje deterministyczną preferencję świeższych filmów przy podobnym dopasowaniu.
 
 W trybie mieszanym sesja preferuje układ subskrypcja, nowy twórca, subskrypcja, a pięć alternatyw kontynuuje ten wzorzec. Tryby wyłączne nie rozszerzają samodzielnie źródła. `Next set` zachowuje wspólny łańcuch i wyklucza wszystkie materiały pokazane na wcześniejszych stronach.
 
@@ -55,7 +57,9 @@ Feedback zmienia kolejne wyniki: obejrzany materiał jest wykluczany, brak zaint
 - `POST /api/recommendations/session`, `GET /api/recommendations/session/latest`;
 - `POST /api/recommendations/session/:sessionId/next`;
 - `POST /api/recommendations/:videoId/feedback` i `POST /api/recommendations/:videoId/opened`;
-- `GET /api/queue`, `POST /api/queue`, `DELETE /api/queue/:videoId`.
+- `GET /api/queue?sort=...`, `POST /api/queue`, `DELETE /api/queue/:videoId`.
+
+Kolejkę można sortować według daty zapisania, daty publikacji i długości. Usunięcie pozycji jest trwałe i ograniczone do konta zalogowanego użytkownika.
 
 ## Bezpieczeństwo i limity
 

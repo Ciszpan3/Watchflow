@@ -43,7 +43,7 @@ databaseTest("PostgreSQL repositories", () => {
     });
     const draftRequest = {
       minutes: 30, timeLimitEnabled: false, recommendationMode: "single", intent: "relax", source: "mixed",
-      topics: [], formats: ["standard"], languages: ["en"], novelty: 50, depth: 50, audioFriendly: false, antiClickbait: true
+      topics: [], formats: ["standard"], languages: ["en"], maxAgeMonths: 12, audioFriendly: false, antiClickbait: true
     };
     await db.viewerSessionDraft.create({ data: { userId, request: draftRequest } });
     await expect(db.viewerSessionDraft.findUniqueOrThrow({ where: { userId } })).resolves.toMatchObject({ request: draftRequest });

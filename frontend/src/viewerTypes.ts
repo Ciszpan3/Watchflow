@@ -4,9 +4,12 @@ export type VideoFormat = "standard" | "short" | "live" | "podcast";
 export type LanguageCode = "en" | "pl";
 export type OnboardingStatus = "not_started" | "in_progress" | "completed" | "skipped";
 export type RecommendationMode = "session" | "single";
+export type MaxAgeMonths = 1 | 3 | 6 | 12 | 24 | null;
+export type FitTier = "excellent" | "strong" | "good" | "exploratory";
+export type QueueSort = "saved_newest" | "saved_oldest" | "published_newest" | "published_oldest" | "shortest" | "longest";
 
 export type ViewerProfile = {
-  version: 1;
+  version: 2;
   status: OnboardingStatus;
   interests: string[];
   customTopics: string[];
@@ -14,9 +17,6 @@ export type ViewerProfile = {
   languages: LanguageCode[];
   formats: VideoFormat[];
   defaultSource: SourceMode;
-  novelty: number;
-  depth: number;
-  pace: number;
   audioFriendly: boolean;
   antiClickbait: boolean;
   useSubscriptions: boolean;
@@ -75,6 +75,7 @@ export type Recommendation = {
   duration: number;
   views: string;
   published: string;
+  publishedAt: string | null;
   intents: WatchIntent[];
   source: Exclude<SourceMode, "mixed">;
   channelSubscribed: boolean;
@@ -82,14 +83,12 @@ export type Recommendation = {
   language: LanguageCode;
   format: VideoFormat;
   likedAffinity: number;
-  novelty: number;
-  depth: number;
   baseReason: string;
   signals: string[];
 };
 
 export type ScoredRecommendation = Recommendation & {
-  match: number;
+  fit: FitTier;
   reason: string;
   recommendationSignals: string[];
   youtubeUrl?: string;
@@ -104,10 +103,13 @@ export type RecommendationSessionRequest = {
   topics: string[];
   formats: VideoFormat[];
   languages: LanguageCode[];
-  novelty: number;
-  depth: number;
+  maxAgeMonths: MaxAgeMonths;
   audioFriendly: boolean;
   antiClickbait: boolean;
+};
+
+export type QueueItem = ScoredRecommendation & {
+  savedAt: string;
 };
 
 export type RecommendationSessionResponse = {

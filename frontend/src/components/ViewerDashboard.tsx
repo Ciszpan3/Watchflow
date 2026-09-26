@@ -22,6 +22,7 @@ import {
   Sparkles,
   Telescope,
   ThumbsDown,
+  Trash2,
   UserCheck,
   UserRound,
   Users,
@@ -65,6 +66,9 @@ import {
 import type {
   AuthSession,
   LanguageCode,
+  MaxAgeMonths,
+  QueueItem,
+  QueueSort,
   RecommendationMode,
   RecommendationSessionRequest,
   ScoredRecommendation,
@@ -101,6 +105,16 @@ const sourceOptions: { value: SourceMode; label: string; note: string; icon: typ
 
 const formatLabels: Record<VideoFormat, string> = { standard: "Standard", short: "Shorts", live: "Live", podcast: "Podcasts" };
 const languageLabels: Record<LanguageCode, string> = { en: "English", pl: "Polish" };
+const fitLabels = { excellent: "Excellent fit", strong: "Strong fit", good: "Good fit", exploratory: "Exploratory pick" } as const;
+const ageOptions: Array<{ value: MaxAgeMonths; label: string }> = [
+  { value: 1, label: "30 days" }, { value: 3, label: "3 months" }, { value: 6, label: "6 months" },
+  { value: 12, label: "12 months" }, { value: 24, label: "24 months" }, { value: null, label: "Any age" }
+];
+const queueSortOptions: Array<{ value: QueueSort; label: string }> = [
+  { value: "saved_newest", label: "Recently saved" }, { value: "saved_oldest", label: "Saved longest ago" },
+  { value: "published_newest", label: "Newest published" }, { value: "published_oldest", label: "Oldest published" },
+  { value: "shortest", label: "Shortest first" }, { value: "longest", label: "Longest first" }
+];
 const feedbackReasons = [
   { id: "already_watched" as const, label: "I already watched it" },
   { id: "not_interested" as const, label: "Not interested in this topic" },
@@ -118,8 +132,7 @@ const initialRequest: RecommendationSessionRequest = {
   topics: [],
   formats: defaultViewerProfile.formats,
   languages: defaultViewerProfile.languages,
-  novelty: defaultViewerProfile.novelty,
-  depth: defaultViewerProfile.depth,
+  maxAgeMonths: 12,
   audioFriendly: defaultViewerProfile.audioFriendly,
   antiClickbait: defaultViewerProfile.antiClickbait
 };
@@ -171,7 +184,7 @@ function RecommendationCard({ video, saved, live, onSave, onPlay, onReject }: {
 }) {
   return (
     <article className="recommendation-card">
-      <div className="video-image-wrap"><SafeImage src={video.image} alt="" /><span className="duration-badge">{video.duration}:00</span><span className="match-badge"><Sparkles />{video.match}% match</span><span className={`source-badge ${video.source}`}>{video.source === "subscribed" ? <UserCheck /> : <Telescope />}{video.source === "subscribed" ? "Subscribed" : "New creator"}</span></div>
+      <div className="video-image-wrap"><SafeImage src={video.image} alt="" /><span className="duration-badge">{video.duration}:00</span><span className={`match-badge ${video.fit}`}><Sparkles />{fitLabels[video.fit]}</span><span className={`source-badge ${video.source}`}>{video.source === "subscribed" ? <UserCheck /> : <Telescope />}{video.source === "subscribed" ? "Subscribed" : "New creator"}</span></div>
       <div className="recommendation-copy">
         <div className="video-meta"><span>{video.channel}</span><i /><span>{video.views}</span><i /><span>{video.published}</span></div>
         <h3>{video.title}</h3>
@@ -185,6 +198,20 @@ function RecommendationCard({ video, saved, live, onSave, onPlay, onReject }: {
 
 function toggleValue<T extends string>(values: T[], value: T) {
   return values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
+}
+
+function sortQueueItems(items: QueueItem[], sort: QueueSort) {
+  const value = (item: QueueItem) => sort.startsWith("saved") ? new Date(item.savedAt).getTime()
+    : sort.startsWith("published") ? new Date(item.publishedAt ?? 0).getTime()
+      : item.duration;
+  const direction = sort === "saved_oldest" || sort === "published_oldest" || sort === "shortest" ? 1 : -1;
+  return [...items].sort((left, right) => {
+    if (sort.startsWith("published")) {
+      if (!left.publishedAt) return 1;
+      if (!right.publishedAt) return -1;
+    }
+    return (value(left) - value(right)) * direction;
+  });
 }
 
 export function ViewerDashboard() {
@@ -207,8 +234,7 @@ export function ViewerDashboard() {
   const [topics, setTopics] = React.useState<string[]>([]);
   const [formats, setFormats] = React.useState<VideoFormat[]>(initialRequest.formats);
   const [languages, setLanguages] = React.useState<LanguageCode[]>(initialRequest.languages);
-  const [novelty, setNovelty] = React.useState(initialRequest.novelty);
-  const [depth, setDepth] = React.useState(initialRequest.depth);
+  const [maxAgeMonths, setMaxAgeMonths] = React.useState<MaxAgeMonths>(initialRequest.maxAgeMonths);
   const [audioFriendly, setAudioFriendly] = React.useState(initialRequest.audioFriendly);
   const [antiClickbait, setAntiClickbait] = React.useState(initialRequest.antiClickbait);
   const [moreFilters, setMoreFilters] = React.useState(false);
@@ -216,8 +242,11 @@ export function ViewerDashboard() {
   const [hydrated, setHydrated] = React.useState(false);
   const [saveState, setSaveState] = React.useState<"idle" | "saving" | "saved" | "error">("idle");
   const [session, setSession] = React.useState(() => createDemoSession(initialRequest, defaultViewerProfile));
-  const [saved, setSaved] = React.useState(() => new Set(["city-history", "woodworking"]));
-  const [liveQueue, setLiveQueue] = React.useState<ScoredRecommendation[]>([]);
+  const [saved, setSaved] = React.useState(() => new Set(queueItems.map((item) => item.id)));
+  const [liveQueue, setLiveQueue] = React.useState<QueueItem[]>([]);
+  const [demoQueue, setDemoQueue] = React.useState<QueueItem[]>(queueItems);
+  const [queueSort, setQueueSort] = React.useState<QueueSort>("saved_newest");
+  const [removingVideoId, setRemovingVideoId] = React.useState<string | null>(null);
   const [feedbackVideo, setFeedbackVideo] = React.useState<ScoredRecommendation | null>(null);
   const [toast, setToast] = React.useState<Toast | null>(null);
   const connected = Boolean(authSession?.authenticated && authSession.youtube.connected && mode === "live");
@@ -226,8 +255,7 @@ export function ViewerDashboard() {
     setSource(nextProfile.defaultSource);
     setFormats(nextProfile.formats);
     setLanguages(nextProfile.languages);
-    setNovelty(nextProfile.novelty);
-    setDepth(nextProfile.depth);
+    setMaxAgeMonths(12);
     setAudioFriendly(nextProfile.audioFriendly);
     setAntiClickbait(nextProfile.antiClickbait);
     setTopics([]);
@@ -242,8 +270,7 @@ export function ViewerDashboard() {
     setTopics(request.topics);
     setFormats(request.formats);
     setLanguages(request.languages);
-    setNovelty(request.novelty);
-    setDepth(request.depth);
+    setMaxAgeMonths(request.maxAgeMonths);
     setAudioFriendly(request.audioFriendly);
     setAntiClickbait(request.antiClickbait);
   }, []);
@@ -295,7 +322,7 @@ export function ViewerDashboard() {
           setProfile(localProfile);
           if (draft.request) applySessionRequest(draft.request); else applyProfileDefaults(localProfile);
           setSignals(await getViewerSignals(false, localProfile));
-          setSession(latest.session ?? createDemoSession({ ...initialRequest, source: localProfile.defaultSource, formats: localProfile.formats, languages: localProfile.languages, novelty: localProfile.novelty, depth: localProfile.depth, audioFriendly: localProfile.audioFriendly, antiClickbait: localProfile.antiClickbait }, localProfile));
+          setSession(latest.session ?? createDemoSession({ ...initialRequest, source: localProfile.defaultSource, formats: localProfile.formats, languages: localProfile.languages, audioFriendly: localProfile.audioFriendly, antiClickbait: localProfile.antiClickbait }, localProfile));
         }
         if (oauthError) setAppError("Google connection could not be completed. Try connecting again or continue with demo data.");
       } catch (error) {
@@ -331,9 +358,14 @@ export function ViewerDashboard() {
     return () => window.clearTimeout(timeout);
   }, [toast]);
 
+  React.useEffect(() => {
+    if (!hydrated || mode !== "live") return;
+    void getQueue(queueSort).then((queue) => setLiveQueue(queue.items)).catch((error: unknown) => setAppError(error instanceof Error ? error.message : "The queue could not be sorted."));
+  }, [hydrated, mode, queueSort]);
+
   const buildRequest = React.useCallback((sourceOverride?: SourceMode): RecommendationSessionRequest => ({
-    minutes, timeLimitEnabled, recommendationMode, intent, source: sourceOverride ?? source, topics, formats, languages, novelty, depth, audioFriendly, antiClickbait
-  }), [antiClickbait, audioFriendly, depth, formats, intent, languages, minutes, novelty, recommendationMode, source, timeLimitEnabled, topics]);
+    minutes, timeLimitEnabled, recommendationMode, intent, source: sourceOverride ?? source, topics, formats, languages, maxAgeMonths, audioFriendly, antiClickbait
+  }), [antiClickbait, audioFriendly, formats, intent, languages, maxAgeMonths, minutes, recommendationMode, source, timeLimitEnabled, topics]);
 
   React.useEffect(() => {
     if (!hydrated) return;
@@ -390,15 +422,22 @@ export function ViewerDashboard() {
 
   async function toggleSaved(video: ScoredRecommendation) {
     const removing = saved.has(video.id);
+    const queuedItem: QueueItem = "savedAt" in video ? video as QueueItem : { ...video, savedAt: new Date().toISOString() };
+    const updateQueue = mode === "live" ? setLiveQueue : setDemoQueue;
+    setRemovingVideoId(removing ? video.id : null);
+    updateQueue((current) => removing ? current.filter((item) => item.id !== video.id) : [queuedItem, ...current]);
+    setSaved((current) => { const next = new Set(current); if (removing) next.delete(video.id); else next.add(video.id); return next; });
     try {
       if (mode === "live") {
         if (removing) await removeFromQueue(video.id); else await saveToQueue(video.id);
-        setLiveQueue((current) => removing ? current.filter((item) => item.id !== video.id) : [video, ...current]);
       }
-      setSaved((current) => { const next = new Set(current); if (removing) next.delete(video.id); else next.add(video.id); return next; });
       setToast({ message: removing ? "Removed from your queue." : "Saved to your queue." });
     } catch (error) {
+      updateQueue((current) => removing ? [queuedItem, ...current] : current.filter((item) => item.id !== video.id));
+      setSaved((current) => { const next = new Set(current); if (removing) next.add(video.id); else next.delete(video.id); return next; });
       setAppError(error instanceof Error ? error.message : "The queue could not be updated.");
+    } finally {
+      setRemovingVideoId(null);
     }
   }
 
@@ -488,7 +527,7 @@ export function ViewerDashboard() {
     audioFriendly ? "Audio-friendly" : null,
     antiClickbait ? "Anti-clickbait" : null
   ].filter(Boolean) as string[];
-  const displayedQueue = mode === "live" ? liveQueue : queueItems;
+  const displayedQueue = sortQueueItems(mode === "live" ? liveQueue : demoQueue, queueSort);
   const filtersChanged = JSON.stringify(session.request) !== JSON.stringify(buildRequest());
 
   if (loadingApp) {
@@ -522,7 +561,7 @@ export function ViewerDashboard() {
             {moreFilters && <div className="advanced-filters">
               <fieldset><legend>Topic for this session</legend><div className="filter-chip-row">{interestOptions.map((option) => <button key={option.id} className={topics.includes(option.id) ? "selected" : ""} type="button" onClick={() => setTopics((current) => toggleValue(current, option.id))}>{topics.includes(option.id) && <Check />}{option.label}</button>)}</div></fieldset>
               <div className="filter-columns"><fieldset><legend>Formats</legend><div className="filter-chip-row compact">{(Object.keys(formatLabels) as VideoFormat[]).map((format) => <button key={format} className={formats.includes(format) ? "selected" : ""} type="button" onClick={() => setFormats((current) => toggleValue(current, format))}>{formatLabels[format]}</button>)}</div></fieldset><fieldset><legend>Languages</legend><div className="filter-chip-row compact">{(Object.keys(languageLabels) as LanguageCode[]).map((language) => <button key={language} className={languages.includes(language) ? "selected" : ""} type="button" onClick={() => setLanguages((current) => toggleValue(current, language))}>{languageLabels[language]}</button>)}</div></fieldset></div>
-              <div className="filter-columns"><label className="range-control"><span><b>Familiar</b><b>Surprise me</b></span><input type="range" min="0" max="100" value={novelty} onChange={(event) => setNovelty(Number(event.target.value))} /><small>{novelty < 40 ? "Mostly familiar" : novelty > 70 ? "More new territory" : "Balanced discovery"}</small></label><label className="range-control"><span><b>Quick overview</b><b>Deep dive</b></span><input type="range" min="0" max="100" value={depth} onChange={(event) => setDepth(Number(event.target.value))} /><small>{depth < 40 ? "Light and quick" : depth > 70 ? "Detailed and focused" : "Useful detail"}</small></label></div>
+              <fieldset><legend>Published within</legend><div className="filter-chip-row compact age-filter">{ageOptions.map((option) => <button key={option.label} className={maxAgeMonths === option.value ? "selected" : ""} type="button" onClick={() => setMaxAgeMonths(option.value)}>{option.label}</button>)}</div><small className="filter-help">This is a strict limit. Watchflow will not fill the set with older videos.</small></fieldset>
               <div className="filter-columns toggles"><label className="toggle-row"><span><Brain /><span><strong>Audio-friendly</strong><small>Works without watching closely</small></span></span><input type="checkbox" checked={audioFriendly} onChange={(event) => setAudioFriendly(event.target.checked)} /><i /></label><label className="toggle-row"><span><CheckCircle2 /><span><strong>Anti-clickbait filter</strong><small>Prefer accurate titles</small></span></span><input type="checkbox" checked={antiClickbait} onChange={(event) => setAntiClickbait(event.target.checked)} /><i /></label></div>
             </div>}
             <button className="button primary build-button" type="button" onClick={() => void generateSession()} disabled={building || !formats.length || !languages.length}>{building ? <LoaderCircle className="spin" /> : <Sparkles />}{building ? "Finding the best matches…" : recommendationMode === "single" ? "Find video alternatives" : "Build my session"}</button>
@@ -534,7 +573,7 @@ export function ViewerDashboard() {
           {session.items.length ? <>{session.recommendationMode === "session" && <div className="session-timeline" aria-label={`${session.items.length} video session lasting ${session.totalMinutes} minutes`}>{session.items.map((video, index) => <span key={video.id} style={{ flex: video.duration }}><i>{index + 1}</i>{video.duration} min</span>)}<b>Done</b></div>}<div className={`recommendation-grid ${session.recommendationMode === "single" ? "single-mode" : ""}`}>{session.items.map((video) => <RecommendationCard key={video.id} video={video} live={mode === "live"} saved={saved.has(video.id)} onSave={() => void toggleSaved(video)} onPlay={() => void openVideo(video)} onReject={() => setFeedbackVideo(video)} />)}</div><div className="session-actions"><button className="button secondary next-set" type="button" onClick={() => void nextSet()} disabled={building || !session.hasMore}>{building ? <LoaderCircle className="spin" /> : <RefreshCcw />}{building ? "Finding another set…" : session.hasMore ? "Next set" : "No more matches"}</button><small>Previously shown videos will not repeat.</small></div></> : <div className="recommendation-empty"><Search /><strong>{mode === "live" && !signals.lastSyncedAt ? "Sync YouTube before your first live session" : session.page > 1 ? "You reached the end of these matches" : "Nothing fits every choice"}</strong><p>{mode === "live" && !signals.lastSyncedAt ? "Watchflow needs subscriptions and likes before it can rank real videos." : "We will never silently mix in a source you did not choose."}</p><div className="empty-actions">{mode === "live" && !signals.lastSyncedAt ? <button className="button secondary" type="button" onClick={() => void syncNow()} disabled={syncing}><RefreshCcw />Start sync</button> : <button className="button secondary" type="button" onClick={() => document.querySelector("#for-you")?.scrollIntoView({ behavior: "smooth" })}><SlidersHorizontal />Change filters</button>}{source !== "mixed" && <button className="button secondary" type="button" onClick={() => void generateSession("mixed")}><Users />Try Balanced instead</button>}</div></div>}
         </section>
 
-        <div className="utility-grid"><section className="utility-panel queue-panel" id="queue"><div className="section-header compact-header"><div><span className="section-kicker">Saved-video rescue</span><h2>Worth another look</h2><p>{mode === "live" ? "Your saved recommendations stay here between visits." : "Demo examples of videos that have been waiting too long."}</p></div>{displayedQueue.length > 0 && <button className="button secondary" type="button" onClick={() => void openVideo(displayedQueue[Math.floor(Math.random() * displayedQueue.length)] as ScoredRecommendation)}><Sparkles />Pick one</button>}</div>{displayedQueue.length ? <div className="queue-list">{displayedQueue.map((video, index) => <article key={video.id}><SafeImage src={video.image} alt="" /><div><span>{mode === "live" ? "Saved recommendation" : index === 0 ? "Saved 3 weeks ago" : index === 1 ? "Saved 1 month ago" : "Saved 6 weeks ago"}</span><h3>{video.title}</h3><p>{video.channel} · {video.duration} min</p></div><button className="icon-button" type="button" onClick={() => void openVideo(video as ScoredRecommendation)} aria-label={`Open ${video.title}`}><ChevronRight /></button></article>)}</div> : <div className="compact-empty"><Bookmark /><strong>Your queue is empty</strong><p>Save a recommendation and it will remain available here.</p></div>}</section>
+        <div className="utility-grid"><section className="utility-panel queue-panel" id="queue"><div className="section-header compact-header queue-header"><div><span className="section-kicker">Saved-video rescue</span><h2>Worth another look</h2><p>{mode === "live" ? "Your saved recommendations stay here between visits." : "Demo examples of videos that have been waiting too long."}</p></div><div className="queue-tools"><label><span>Sort saved videos</span><select value={queueSort} onChange={(event) => setQueueSort(event.target.value as QueueSort)}>{queueSortOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><ChevronDown /></label>{displayedQueue.length > 0 && <button className="button secondary" type="button" onClick={() => void openVideo(displayedQueue[Math.floor(Math.random() * displayedQueue.length)])}><Sparkles />Pick one</button>}</div></div>{displayedQueue.length ? <div className="queue-list">{displayedQueue.map((video) => <article key={video.id}><SafeImage src={video.image} alt="" /><div><span>Saved {new Date(video.savedAt).toLocaleDateString()}</span><h3>{video.title}</h3><p>{video.channel} · {video.duration} min · {video.published}</p></div><div className="queue-actions"><button className="icon-button" type="button" onClick={() => void openVideo(video)} aria-label={`Open ${video.title}`}><ChevronRight /></button><button className="icon-button remove-queue" type="button" onClick={() => void toggleSaved(video)} disabled={removingVideoId === video.id} aria-label={`Remove ${video.title} from queue`}>{removingVideoId === video.id ? <LoaderCircle className="spin" /> : <Trash2 />}</button></div></article>)}</div> : <div className="compact-empty"><Bookmark /><strong>Your queue is empty</strong><p>Save a recommendation and it will remain available here.</p></div>}</section>
           <section className="utility-panel path-panel" id="paths">{mode === "live" ? <div className="feature-unavailable"><Route /><span className="section-kicker">Learning paths</span><h2>Coming after your first sessions</h2><p>Live learning paths are not generated yet. Watchflow will never present demo progress as yours.</p></div> : <><div className="section-header compact-header"><div><span className="section-kicker">Continue learning</span><h2>Understanding the night sky</h2><p>1 of 4 demo steps completed</p></div><span className="path-progress">25%</span></div><div className="path-steps"><div className="complete"><span><Check /></span><div><strong>How to read the night sky</strong><small>Completed · 12 min</small></div></div><div className="current"><span>2</span><div><strong>Why Saturn has rings</strong><small>Up next · 18 min</small></div><Play /></div><div><span>3</span><div><strong>Finding planets from home</strong><small>15 min</small></div></div><div><span>4</span><div><strong>Your first telescope</strong><small>21 min</small></div></div></div></>}</section></div>
 
         <div className="utility-grid bottom-grid" id="taste"><section className="utility-panel taste-panel profile-summary"><div className="section-header compact-header"><div><span className="section-kicker">Editable taste profile</span><h2>What Watchflow understands</h2><p>{profile.status === "completed" ? `Your ${mode === "live" ? "saved" : "local"} defaults guide every new session.` : "Balanced defaults are active until setup is complete."}</p></div><Brain /></div><div className="profile-summary-grid"><div><span>Interests</span><p>{profile.interests.map((interest) => interestOptions.find((item) => item.id === interest)?.label ?? interest).join(", ") || "Not set"}</p></div><div><span>Languages</span><p>{profile.languages.map((language) => languageLabels[language]).join(", ")}</p></div><div><span>Default source</span><p>{sourceOptions.find((option) => option.value === profile.defaultSource)?.label}</p></div><div><span>YouTube signals</span><p>{profile.useSubscriptions && profile.useLikedVideos ? "Subscriptions + likes" : profile.useSubscriptions ? "Subscriptions" : profile.useLikedVideos ? "Liked videos" : "Explicit profile only"}</p></div></div><button className="button secondary edit-profile" type="button" onClick={() => { setEditingProfile(true); setOnboardingOpen(true); }}><SlidersHorizontal />Edit taste profile</button>{mode === "live" && <div className="account-actions"><button type="button" onClick={() => { if (window.confirm("Disconnect YouTube and remove imported YouTube data? Your taste profile will remain.")) void disconnectYoutube().then(() => window.location.reload()); }}>Disconnect YouTube</button><button className="danger" type="button" onClick={() => { if (window.confirm("Permanently delete your Watchflow account and all stored data?")) void deleteViewerAccount().then(() => window.location.reload()); }}>Delete account</button></div>}</section>

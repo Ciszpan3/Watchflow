@@ -6,18 +6,48 @@ import { serializeVideo } from "../services/recommendations.js";
 export const queueRouter = Router();
 queueRouter.use(optionalAuth, requireAuth);
 
+export const queueSortOptions = ["saved_newest", "saved_oldest", "published_newest", "published_oldest", "shortest", "longest"] as const;
+type QueueSort = typeof queueSortOptions[number];
+
+function queueComparator(sort: QueueSort) {
+  const value = (item: { createdAt: Date; video: { publishedAt: Date | null; durationSeconds: number } }) => {
+    if (sort.startsWith("saved")) return item.createdAt.getTime();
+    if (sort.startsWith("published")) return item.video.publishedAt?.getTime() ?? 0;
+    return item.video.durationSeconds;
+  };
+  const direction = sort === "saved_oldest" || sort === "published_oldest" || sort === "shortest" ? 1 : -1;
+  return (left: Parameters<typeof value>[0], right: Parameters<typeof value>[0]) => {
+    if (sort.startsWith("published")) {
+      if (!left.video.publishedAt) return 1;
+      if (!right.video.publishedAt) return -1;
+    }
+    return (value(left) - value(right)) * direction;
+  };
+}
+
+export function sortQueueRecords<T extends { createdAt: Date; video: { publishedAt: Date | null; durationSeconds: number } }>(items: T[], sort: QueueSort) {
+  return [...items].sort(queueComparator(sort));
+}
+
 queueRouter.get("/", async (req, res, next) => {
   try {
     const userId = getAuthUser(req).id;
+    const sort = String(req.query.sort ?? "saved_newest") as QueueSort;
+    if (!queueSortOptions.includes(sort)) {
+      res.status(422).json({ error: "invalid_queue_sort", message: "Queue sort option is not supported." });
+      return;
+    }
     const saved = await db.savedVideo.findMany({
       where: { userId },
-      orderBy: { createdAt: "desc" },
       include: { video: { include: { channel: true } } }
     });
     const subscriptions = await db.subscription.findMany({ where: { userId }, select: { channelId: true } });
     const subscribed = new Set(subscriptions.map((item) => item.channelId));
     res.json({
-      items: saved.map((item) => serializeVideo(item.video, subscribed.has(item.video.channelId) ? "subscribed" : "new"))
+      items: sortQueueRecords(saved, sort).map((item) => ({
+        ...serializeVideo(item.video, subscribed.has(item.video.channelId) ? "subscribed" : "new"),
+        savedAt: item.createdAt.toISOString()
+      }))
     });
   } catch (error) {
     next(error);

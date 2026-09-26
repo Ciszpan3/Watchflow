@@ -12,8 +12,7 @@ const request: RecommendationSessionRequest = {
   topics: [],
   formats: ["standard", "short", "live", "podcast"],
   languages: ["en", "pl"],
-  novelty: 58,
-  depth: 62,
+  maxAgeMonths: 12,
   audioFriendly: false,
   antiClickbait: true
 };
@@ -75,5 +74,21 @@ describe("viewer recommendation sessions", () => {
     const next = createDemoSession(first.request, defaultViewerProfile, recommendations, first.seenVideoIds, 2, first.chainId);
     expect(next.items.some((video) => first.seenVideoIds.includes(video.id))).toBe(false);
     expect(next.page).toBe(2);
+  });
+
+  it("treats the selected publication age as a strict filter", () => {
+    const recent: Recommendation = { ...recommendations[0], id: "recent", publishedAt: new Date().toISOString() };
+    const old: Recommendation = { ...recommendations[0], id: "old", publishedAt: "2020-01-01T00:00:00.000Z" };
+    const limited = createDemoSession({ ...request, source: "subscribed", maxAgeMonths: 12 }, defaultViewerProfile, [old, recent]);
+    const unlimited = createDemoSession({ ...request, source: "subscribed", maxAgeMonths: null }, defaultViewerProfile, [old, recent]);
+    expect(limited.items.map((video) => video.id)).toEqual(["recent"]);
+    expect(unlimited.items.map((video) => video.id)).toContain("old");
+  });
+
+  it("does not claim a taste-profile match without a matching signal", () => {
+    const unrelated = { ...recommendations[0], id: "unrelated", topics: ["travel"], likedAffinity: 0 };
+    const profile = { ...defaultViewerProfile, useLikedVideos: false, interests: ["science"] };
+    const result = createDemoSession({ ...request, source: "subscribed", intent: "entertain" }, profile, [unrelated]);
+    expect(result.items[0].recommendationSignals).not.toContain("Taste profile match");
   });
 });

@@ -1,4 +1,6 @@
 import type {
+  FitTier,
+  QueueItem,
   Recommendation,
   RecommendationSessionRequest,
   RecommendationSessionResponse,
@@ -6,6 +8,12 @@ import type {
   SourceMode,
   ViewerProfile
 } from "./viewerTypes";
+
+const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
+
+export function fitTier(score: number): FitTier {
+  return score >= 75 ? "excellent" : score >= 60 ? "strong" : score >= 45 ? "good" : "exploratory";
+}
 
 export const interestOptions = [
   { id: "technology", label: "Technology" },
@@ -22,7 +30,7 @@ export const interestOptions = [
   { id: "diy", label: "DIY" }
 ] as const;
 
-export const recommendations: Recommendation[] = [
+const demoRecommendations: Array<Omit<Recommendation, "publishedAt"> & { novelty: number; depth: number }> = [
   {
     id: "ocean", title: "The Hidden Cities Beneath the Ocean", channel: "Deep Atlas",
     image: "/recommendations/deep-ocean.png", duration: 14, views: "1.8M views", published: "2 weeks ago",
@@ -97,7 +105,18 @@ export const recommendations: Recommendation[] = [
   }
 ];
 
-export const queueItems = recommendations.slice(3, 6);
+export const recommendations: Recommendation[] = demoRecommendations.map(({ novelty: _novelty, depth: _depth, ...video }, index) => ({
+  ...video,
+  publishedAt: daysAgo([14, 5, 30, 8, 21, 4, 1, 6, 3, 0, 7, 2][index])
+}));
+
+export const queueItems: QueueItem[] = recommendations.slice(3, 6).map((video, index) => ({
+  ...video,
+  fit: "good",
+  reason: video.baseReason,
+  recommendationSignals: video.signals.slice(0, 3),
+  savedAt: daysAgo([21, 30, 42][index])
+}));
 
 function overlap(left: string[], right: string[]) {
   return left.filter((value) => right.includes(value));
@@ -114,10 +133,10 @@ function scoreVideo(video: Recommendation, request: RecommendationSessionRequest
   const durationScore = !request.timeLimitEnabled ? 0 : request.recommendationMode === "single"
     ? distance <= tolerance ? 15 - (distance / tolerance) * 5 : Math.max(0, 10 - (distance - tolerance))
     : Math.max(0, 15 - Math.max(0, video.duration - request.minutes) * 2);
-  const alignment = 1 - ((Math.abs(video.novelty - request.novelty) + Math.abs(video.depth - request.depth)) / 200);
-  const preferenceScore = Math.max(0, alignment * 10);
+  const ageDays = video.publishedAt ? Math.max(0, (Date.now() - new Date(video.publishedAt).getTime()) / 86_400_000) : Number.POSITIVE_INFINITY;
+  const freshnessPenalty = ageDays <= 30 ? 0 : ageDays <= 183 ? 2 : ageDays <= 365 ? 5 : ageDays <= 730 ? 10 : 18;
   return {
-    value: intentScore + topicScore + affinityScore + durationScore + preferenceScore,
+    value: Math.max(0, Math.min(90, Math.round(intentScore + topicScore + affinityScore + durationScore - freshnessPenalty))),
     topicMatches
   };
 }
@@ -126,28 +145,39 @@ function sourceAllowed(video: Recommendation, source: SourceMode) {
   return source === "mixed" || video.source === source;
 }
 
-function diversify(candidates: ScoredRecommendation[], selected: ScoredRecommendation[]) {
+type RankedRecommendation = ScoredRecommendation & { score: number };
+
+function diversify(candidates: RankedRecommendation[], selected: RankedRecommendation[]) {
   return [...candidates].sort((left, right) => {
-    const penalty = (video: ScoredRecommendation) => selected.reduce((total, picked) => {
+    const penalty = (video: RankedRecommendation) => selected.reduce((total, picked) => {
       const sameChannel = video.channel === picked.channel ? 18 : 0;
       const sameTopic = overlap(video.topics, picked.topics).length ? 8 : 0;
       return total + sameChannel + sameTopic;
     }, 0);
-    return (right.match - penalty(right)) - (left.match - penalty(left));
+    return (right.score - penalty(right)) - (left.score - penalty(left));
   });
 }
 
-function enrich(video: Recommendation, request: RecommendationSessionRequest, profile: ViewerProfile): ScoredRecommendation {
+function enrich(video: Recommendation, request: RecommendationSessionRequest, profile: ViewerProfile): RankedRecommendation {
   const scored = scoreVideo(video, request, profile);
   const sourceSignal = video.source === "subscribed" ? "From your subscriptions" : "New creator discovery";
-  const affinitySignal = profile.useLikedVideos && video.likedAffinity >= 70 ? "Strong liked-video fit" : "Taste profile match";
-  const topicSignal = scored.topicMatches[0] ? `Matches ${scored.topicMatches[0]}` : `Fits ${request.intent}`;
+  const affinitySignal = profile.useLikedVideos && video.likedAffinity >= 70 ? "Strong liked-video fit" : null;
+  const topicSignal = scored.topicMatches[0] ? `Matches your ${scored.topicMatches[0]} interest` : video.intents.includes(request.intent) ? `Fits ${request.intent}` : null;
   return {
     ...video,
-    match: Math.max(45, Math.min(99, Math.round(scored.value))),
+    score: scored.value,
+    fit: fitTier(scored.value),
     reason: `${video.baseReason} ${sourceSignal}.`,
-    recommendationSignals: [sourceSignal, affinitySignal, topicSignal]
+    recommendationSignals: [sourceSignal, affinitySignal, topicSignal].filter((signal): signal is string => Boolean(signal)).slice(0, 3)
   };
+}
+
+function withinSelectedAge(video: Recommendation, maxAgeMonths: RecommendationSessionRequest["maxAgeMonths"]) {
+  if (maxAgeMonths === null) return true;
+  if (!video.publishedAt) return false;
+  const cutoff = new Date();
+  cutoff.setUTCMonth(cutoff.getUTCMonth() - maxAgeMonths);
+  return new Date(video.publishedAt) >= cutoff;
 }
 
 export function createDemoSession(
@@ -166,6 +196,7 @@ export function createDemoSession(
     const allowedTopic = overlap(video.topics, excluded).length === 0;
     return matchesTopic
       && allowedTopic
+      && withinSelectedAge(video, request.maxAgeMonths)
       && request.languages.includes(video.language)
       && request.formats.includes(video.format);
   });
@@ -182,8 +213,8 @@ export function createDemoSession(
   const ranked = filtered
     .map((video) => enrich(video, request, profile))
     .sort((left, right) => request.recommendationMode === "single" && request.timeLimitEnabled
-      ? Math.abs(left.duration - request.minutes) - Math.abs(right.duration - request.minutes) || right.match - left.match
-      : right.match - left.match);
+      ? Math.abs(left.duration - request.minutes) - Math.abs(right.duration - request.minutes) || right.score - left.score
+      : right.score - left.score);
   const pools = {
     subscribed: ranked.filter((video) => video.source === "subscribed"),
     new: ranked.filter((video) => video.source === "new")
@@ -193,7 +224,7 @@ export function createDemoSession(
     ? Array.from({ length: count }, (_, index) => index % 2 === 0 ? "subscribed" : "new")
     : Array.from({ length: count }, () => request.source as "subscribed" | "new");
 
-  const selected: ScoredRecommendation[] = [];
+  const selected: RankedRecommendation[] = [];
   let totalMinutes = 0;
   for (const preferredSource of preferredSources) {
     const desiredPool = diversify(pools[preferredSource], selected);
@@ -220,7 +251,7 @@ export function createDemoSession(
     hasMore: ranked.some((video) => !selected.some((item) => item.id === video.id)),
     recommendationMode: request.recommendationMode,
     seenVideoIds: [...excludedVideoIds, ...selected.map((item) => item.id)],
-    items: selected,
+    items: selected.map(({ score: _score, ...video }) => video),
     emptyReason: selected.length ? undefined : "no_filter_matches"
   };
 }

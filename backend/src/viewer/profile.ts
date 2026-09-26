@@ -19,7 +19,7 @@ const fromDatabaseStatus: Record<ProfileStatus, ViewerProfileInput["status"]> = 
 
 export function profileCreateData(profile: ViewerProfileInput = defaultProfile) {
   return {
-    version: 1,
+    version: 2,
     status: toDatabaseStatus[profile.status],
     interests: profile.interests,
     customTopics: profile.customTopics,
@@ -27,9 +27,6 @@ export function profileCreateData(profile: ViewerProfileInput = defaultProfile) 
     languages: profile.languages,
     formats: profile.formats,
     defaultSource: profile.defaultSource,
-    novelty: profile.novelty,
-    depth: profile.depth,
-    pace: profile.pace,
     audioFriendly: profile.audioFriendly,
     antiClickbait: profile.antiClickbait,
     useSubscriptions: profile.useSubscriptions,
@@ -39,7 +36,7 @@ export function profileCreateData(profile: ViewerProfileInput = defaultProfile) 
 
 export function serializeProfile(profile: ViewerProfile): ViewerProfileInput {
   return {
-    version: 1,
+    version: 2,
     status: fromDatabaseStatus[profile.status],
     interests: profile.interests,
     customTopics: profile.customTopics,
@@ -47,9 +44,6 @@ export function serializeProfile(profile: ViewerProfile): ViewerProfileInput {
     languages: profile.languages.filter((item): item is "en" | "pl" => item === "en" || item === "pl"),
     formats: profile.formats.filter((item): item is "standard" | "short" | "live" | "podcast" => ["standard", "short", "live", "podcast"].includes(item)),
     defaultSource: profile.defaultSource === "subscribed" || profile.defaultSource === "new" ? profile.defaultSource : "mixed",
-    novelty: profile.novelty,
-    depth: profile.depth,
-    pace: profile.pace,
     audioFriendly: profile.audioFriendly,
     antiClickbait: profile.antiClickbait,
     useSubscriptions: profile.useSubscriptions,
