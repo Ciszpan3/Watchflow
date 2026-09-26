@@ -26,7 +26,7 @@ Import ma ograniczoną równoległość, limit czasu dla pojedynczych żądań Y
 
 Polubienia są sygnałem gustu, a nie osobnym źródłem kandydatów. Historia oglądania i Watch Later pozostają niedostępne przez YouTube Data API.
 
-Nowi twórcy są wyszukiwani maksymalnie dla dwóch języków na sesję. Zapytanie używa rozszerzonego słownika pojęć dla wybranego tematu, a limit publikacji wynosi: 30 dni, 3, 6, 12 lub 24 miesiące albo brak limitu; domyślnie obowiązuje 12 miesięcy. Wybrane okno trafia do `publishedAfter` i klucza cache. Przy braku limitu starsze materiały są dozwolone, ale otrzymują karę wieku. Wyniki `search.list` są przechowywane przez 12 godzin. Atomowy licznik zatrzymuje aplikację przy 80 wywołaniach dziennie, pozostawiając margines bezpieczeństwa. Odkrywanie nowych twórców wymaga domyślnie co najmniej 1000 wyświetleń (`MINIMUM_NEW_CREATOR_VIEWS`); ten próg nie dotyczy kanałów, które użytkownik świadomie subskrybuje.
+Nowi twórcy są wyszukiwani maksymalnie dla dwóch języków na sesję. Jedno zapytanie pobiera do 50 wyników, a przy temacie Gaming używa także `videoCategoryId=20`, żeby odsiać materiały, w których przypadkowo pojawiło się słowo „game”. Zapytanie używa rozszerzonego słownika pojęć dla wybranego tematu, a limit publikacji wynosi: 30 dni, 3, 6, 12 lub 24 miesiące albo brak limitu; domyślnie obowiązuje 12 miesięcy. Wybrane okno trafia do `publishedAfter` i klucza cache. Przy braku limitu starsze materiały są dozwolone, ale otrzymują karę wieku. Wyniki `search.list` są przechowywane przez 12 godzin. Atomowy licznik zatrzymuje aplikację przy 80 wywołaniach dziennie, pozostawiając margines bezpieczeństwa. Odkrywanie nowych twórców wymaga domyślnie co najmniej 10 000 wyświetleń (`MINIMUM_NEW_CREATOR_VIEWS`); ten próg nie dotyczy kanałów, które użytkownik świadomie subskrybuje.
 
 ## Ranking
 
@@ -42,9 +42,11 @@ Ranking korzysta z następujących sygnałów:
 - popularność i proporcja polubień wzmacniają odkrywanie nowych twórców, a domyślny próg 10 000 wyświetleń odrzuca przypadkowe materiały o minimalnym ruchu;
 - wybrana intencja zmienia słowa wyszukiwania oraz ranking, np. `Solve a problem` preferuje poradniki i instrukcje, a `Keep me company` rozmowy i podcasty.
 
+Zaimportowana historia nie jest traktowana jako luźny tag przypięty do każdego filmu z tej samej kategorii. Dla każdego kandydata sprawdzane są konkretne sygnały: zgodność kanału, podobieństwo istotnych słów tytułu oraz wspólne tematy z wpisami historii. Komunikat o historii pojawia się dopiero przy rzeczywistym dopasowaniu. Historia wpływa na ranking tylko po włączeniu jej w profilu i nie zastępuje wybranego tematu sesji.
+
 Wynik liczbowy służy wyłącznie do sortowania. Interfejs pokazuje `Excellent fit`, `Strong fit`, `Good fit` albo `Exploratory pick` oraz maksymalnie trzy rzeczywiste sygnały. Nie są używane suwaki głębokości, tempa ani znajomości, których nie da się wiarygodnie wyprowadzić z metadanych YouTube.
 
-Język i format są filtrami wymaganymi. Wykluczone tematy oraz obejrzane filmy są usuwane. Powtarzające się kanały i tematy otrzymują karę różnorodności. Przy wyłączonym limicie długość nie filtruje ani nie punktuje materiałów. Tryb sesji zwraca do trzech filmów, a tryb pojedynczego filmu pięć alternatyw preferujących długość w zakresie ±20% wskazanego czasu, co najmniej ±5 minut.
+Język i format są filtrami wymaganymi. Wykluczone tematy oraz obejrzane filmy są usuwane. Powtarzające się kanały i tematy otrzymują karę różnorodności. Przy wyłączonym limicie długość nie filtruje ani nie punktuje materiałów. Oba tryby respektują wybraną liczbę wyników: 3, 5 albo 10. Tryb sesji układa filmy w ramach wspólnego limitu, a tryb pojedynczego filmu preferuje długość w zakresie ±20% wskazanego czasu, co najmniej ±5 minut.
 
 Wybrany limit wieku jest ścisłym filtrem dla obu źródeł. Aplikacja nie uzupełnia zestawu starszymi materiałami. Opcja bez limitu usuwa granicę, lecz zachowuje deterministyczną preferencję świeższych filmów przy podobnym dopasowaniu.
 

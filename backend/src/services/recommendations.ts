@@ -28,7 +28,7 @@ async function reserveSearchCall() {
   return reserved.count === 1;
 }
 
-const freshnessCacheVersion = "coverage-v4";
+const freshnessCacheVersion = "coverage-v5";
 const dayMs = 86_400_000;
 
 export function subscriptionCandidateExpiration(now = new Date()) {
@@ -55,21 +55,22 @@ function ageCutoff(maxAgeMonths: RecommendationRequest["maxAgeMonths"], now = ne
   return cutoff;
 }
 
-export function searchCacheKey(query: string, language: string, format: string | undefined, maxAgeMonths: RecommendationRequest["maxAgeMonths"] = 12) {
-  return createHash("sha256").update(`${freshnessCacheVersion}|${maxAgeMonths ?? "any"}|${query}|${language}|${format ?? "any"}`).digest("hex");
+export function searchCacheKey(query: string, language: string, format: string | undefined, maxAgeMonths: RecommendationRequest["maxAgeMonths"] = 12, categoryId?: string) {
+  return createHash("sha256").update(`${freshnessCacheVersion}|${maxAgeMonths ?? "any"}|${query}|${language}|${format ?? "any"}|${categoryId ?? "any"}`).digest("hex");
 }
 
-export function youtubeSearchParameters(query: string, language: string, maxAgeMonths: RecommendationRequest["maxAgeMonths"] = 12, now = new Date()) {
+export function youtubeSearchParameters(query: string, language: string, maxAgeMonths: RecommendationRequest["maxAgeMonths"] = 12, now = new Date(), categoryId?: string) {
   const cutoff = ageCutoff(maxAgeMonths, now);
   return {
     part: ["snippet"] as "snippet"[],
     q: query,
     type: ["video"] as "video"[],
-    maxResults: 25,
+    maxResults: 50,
     order: "relevance" as const,
     relevanceLanguage: language,
     safeSearch: "moderate" as const,
     videoEmbeddable: "true" as const,
+    ...(categoryId ? { videoCategoryId: categoryId } : {}),
     ...(cutoff ? { publishedAfter: cutoff.toISOString() } : {})
   };
 }
@@ -79,6 +80,7 @@ async function searchNewVideos(userId: string, request: RecommendationRequest, p
   const languages = request.languages.slice(0, 2);
   const subscriptions = await db.subscription.findMany({ where: { userId }, select: { channelId: true } });
   const subscribedChannels = new Set(subscriptions.map((item) => item.channelId));
+  const categoryId = topics.includes("gaming") ? "20" : undefined;
   let quotaLimited = false;
 
   async function saveSearchCandidates(videoIds: string[]) {
@@ -102,7 +104,7 @@ async function searchNewVideos(userId: string, request: RecommendationRequest, p
   for (const language of languages) {
     const queryTerms = topics.flatMap(topicSearchTerms).slice(0, 10);
     const query = `${queryTerms.join("|") || "interesting documentary"} ${intentSearchTerms[request.intent].join("|")}`.trim();
-    const key = searchCacheKey(query, language, request.formats.length === 1 ? request.formats[0] : undefined, request.maxAgeMonths);
+    const key = searchCacheKey(query, language, request.formats.length === 1 ? request.formats[0] : undefined, request.maxAgeMonths, categoryId);
     const cached = await db.searchCache.findUnique({ where: { cacheKey: key } });
     let ids = cached && cached.expiresAt > new Date() ? cached.videoIds : [];
     if (!ids.length) {
@@ -111,7 +113,7 @@ async function searchNewVideos(userId: string, request: RecommendationRequest, p
         continue;
       }
       const youtube = await youtubeForUser(userId);
-      const response = await youtube.search.list(youtubeSearchParameters(query, language, request.maxAgeMonths), { timeout: env.youtubeRequestTimeoutMs });
+      const response = await youtube.search.list(youtubeSearchParameters(query, language, request.maxAgeMonths, new Date(), categoryId), { timeout: env.youtubeRequestTimeoutMs });
       ids = (response.data.items ?? []).map((item) => item.id?.videoId).filter((id): id is string => Boolean(id));
       const details = await videoDetails(youtube, ids);
       for (const item of details) {
@@ -241,7 +243,16 @@ function durationFit(duration: number, request: RecommendationRequest) {
 }
 
 function effectiveTopics(video: Video & { channel: Channel }) {
-  return [...new Set([...video.topics, ...classifyTopicsFromText(`${video.channel.title} ${video.channel.description ?? ""}`)])];
+  const categoryTopics: Record<string, string[]> = {
+    "17": ["health"],
+    "20": ["gaming"],
+    "10": ["music"]
+  };
+  return [...new Set([
+    ...video.topics,
+    ...classifyTopicsFromText(`${video.channel.title} ${video.channel.description ?? ""}`),
+    ...(video.categoryId ? categoryTopics[video.categoryId] ?? [] : [])
+  ])];
 }
 
 function topicCategoryMismatch(video: Video, requestedTopics: string[]) {
@@ -252,9 +263,40 @@ function popularityScore(video: Video, source: "subscribed" | "new") {
   if (source !== "new") return 0;
   const views = Number(video.viewCount ?? 0);
   const likes = Number(video.likeCount ?? 0);
-  const viewScore = Math.min(10, Math.max(0, (Math.log10(Math.max(views, 1)) - 4) * 2));
-  const likeRate = views > 0 ? Math.min(2, (likes / views) * 40) : 0;
+  const viewScore = Math.min(18, Math.max(0, (Math.log10(Math.max(views, 1)) - 4) * 3));
+  const likeRate = views > 0 ? Math.min(4, (likes / views) * 100) : 0;
   return viewScore + likeRate;
+}
+
+const historyStopWords = new Set([
+  "about", "after", "before", "could", "from", "have", "into", "just", "that", "their", "there", "this", "what", "when", "with",
+  "your", "youtube", "watch", "video", "film", "the", "and", "for", "how", "one", "you", "are", "was", "were", "they", "them"
+]);
+
+function titleWords(value: string) {
+  return new Set(value.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((word) => word.length >= 4 && !historyStopWords.has(word)));
+}
+
+function historyAffinity(video: Video & { channel: Channel }, candidateTopics: string[], rows: Array<{ title: string; channelTitle: string | null; topics: string[] }>) {
+  if (!rows.length) return { score: 0, matched: false };
+  const videoWords = titleWords(`${video.title} ${video.channel.title}`);
+  let best = 0;
+  for (const row of rows) {
+    const sameChannel = Boolean(row.channelTitle && row.channelTitle.toLowerCase() === video.channel.title.toLowerCase());
+    const sharedWords = [...titleWords(row.title)].filter((word) => videoWords.has(word));
+    const sharedTopics = overlap(candidateTopics, row.topics);
+    const score = (sameChannel ? 16 : 0) + Math.min(10, sharedWords.length * 5) + Math.min(6, sharedTopics.length * 3);
+    best = Math.max(best, score);
+  }
+  return { score: best, matched: best >= 8 };
+}
+
+function titleSimilarity(left: string, right: string) {
+  const leftWords = titleWords(left);
+  const rightWords = titleWords(right);
+  if (!leftWords.size || !rightWords.size) return 0;
+  const shared = [...leftWords].filter((word) => rightWords.has(word)).length;
+  return shared / Math.max(leftWords.size, rightWords.size);
 }
 
 function selectCandidates(scored: ScoredCandidate[], request: RecommendationRequest) {
@@ -272,21 +314,30 @@ function selectCandidates(scored: ScoredCandidate[], request: RecommendationRequ
       const penalty = (item: ScoredCandidate) => selected.reduce((sum, picked) => sum
         + (item.candidate.video.channelId === picked.candidate.video.channelId ? 18 : 0)
         + (overlap(item.candidate.video.topics, picked.candidate.video.topics).length ? 8 : 0), 0);
+      const titlePenalty = (item: ScoredCandidate) => selected.reduce((sum, picked) => sum
+        + (titleSimilarity(item.candidate.video.title, picked.candidate.video.title) >= 0.7 ? 18 : 0), 0);
       const singleDistance = (item: ScoredCandidate) => request.recommendationMode === "single" && request.timeLimitEnabled
         ? Math.abs(item.durationMinutes - request.minutes)
         : 0;
       return (singleDistance(left) - singleDistance(right))
-        || ((right.match - penalty(right)) - (left.match - penalty(left)));
+        || ((right.match - penalty(right) - titlePenalty(right)) - (left.match - penalty(left) - titlePenalty(left)));
     });
     const next = options.find((item) => {
+      if (selected.some((picked) => picked.candidate.video.id === item.candidate.video.id)) return false;
+      if (desiredSource === "new" && selected.filter((picked) => picked.candidate.source === VideoSource.NEW && picked.candidate.video.channelId === item.candidate.video.channelId).length >= 2) return false;
+      return request.recommendationMode === "single"
+        || !request.timeLimitEnabled
+        || totalMinutes + item.durationMinutes <= request.minutes;
+    });
+    const fallbackNext = next ?? options.find((item) => {
       if (selected.some((picked) => picked.candidate.video.id === item.candidate.video.id)) return false;
       return request.recommendationMode === "single"
         || !request.timeLimitEnabled
         || totalMinutes + item.durationMinutes <= request.minutes;
     });
-    if (!next) continue;
-    selected.push(next);
-    totalMinutes += next.durationMinutes;
+    if (!fallbackNext) continue;
+    selected.push(fallbackNext);
+    totalMinutes += fallbackNext.durationMinutes;
   }
   return selected;
 }
@@ -350,7 +401,6 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
   const likedChannels = new Set(likedRows.map((row) => row.video.channelId));
   const openedTopics = activityRows.filter((row) => row.type === "OPENED").flatMap((row) => row.video.topics);
   const savedTopics = savedRows.flatMap((row) => row.video.topics);
-  const historyTopics = historyRows.flatMap((row) => row.topics);
   const historyChannels = new Set(historyRows.map((row) => row.channelTitle).filter((value): value is string => Boolean(value)));
   const excludedVideoIds = new Set([
     ...feedbackRows.map((row) => row.videoId),
@@ -373,19 +423,20 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
     if (source === "new" && !isPopularNewCreator(video.viewCount)) return [];
     if (!request.formats.includes(video.format as never) || !request.languages.includes((video.language === "pl" ? "pl" : "en") as never)) return [];
     if (request.topics.length && !overlap(topics, request.topics).length) return [];
-    if (topicCategoryMismatch(video, requestedTopics)) return [];
+    if (topicCategoryMismatch(video, request.topics.length ? request.topics : requestedTopics)) return [];
     if (overlap(topics, profile.excludedTopics).length) return [];
     if (request.audioFriendly && !video.audioFriendly) return [];
 
     const topicMatches = overlap(topics, requestedTopics);
     const intentScore = video.intents.includes(request.intent) ? 30 : 0;
     const topicScore = topicMatches.length ? 25 : 0;
+    const history = profile.useWatchHistory ? historyAffinity(video, topics, historyRows) : { score: 0, matched: false };
     const affinityRaw = overlap(topics, likedTopics).length * 12
       + (likedChannels.has(video.channelId) ? 28 : 0)
       + overlap(topics, openedTopics).length * 4
       + overlap(topics, savedTopics).length * 6
-      + (profile.useWatchHistory ? overlap(topics, historyTopics).length * 5 : 0)
-      + (profile.useWatchHistory && historyChannels.has(video.channel.title) ? 12 : 0);
+      + history.score
+      + (profile.useWatchHistory && historyChannels.has(video.channel.title) ? 4 : 0);
     const affinityScore = profile.useLikedVideos ? Math.min(20, affinityRaw / 5) : 10;
     const durationMinutes = Math.max(1, Math.ceil(video.durationSeconds / 60));
     const durationScore = durationFit(durationMinutes, request);
@@ -397,7 +448,7 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
     const match = Math.max(0, Math.min(100, Math.round(intentScore + topicScore + affinityScore + durationScore + popularity - feedbackPenalty - freshness.penalty)));
     const sourceSignal = source === "subscribed" ? "From your subscriptions" : "New creator discovery";
     const popularitySignal = source === "new" ? "Popular on YouTube" : null;
-    const tasteSignal = profile.useWatchHistory && overlap(topics, historyTopics).length ? "Related to your imported watch history" : affinityRaw >= 40 ? "Strong liked-video fit" : topicMatches[0] ? `Matches your ${topicMatches[0]} interest` : null;
+    const tasteSignal = history.matched ? "Related to your imported watch history" : affinityRaw >= 40 ? "Strong liked-video fit" : topicMatches[0] ? `Matches your ${topicMatches[0]} interest` : null;
     const intentSignal = video.intents.includes(request.intent) ? `Fits ${request.intent}` : null;
     const signals = [sourceSignal, popularitySignal ?? freshness.signal, tasteSignal ?? intentSignal].filter((signal): signal is string => Boolean(signal)).slice(0, 3);
     const reason = `${freshnessReason(source, freshness.signal)}.${tasteSignal ? ` ${tasteSignal}.` : intentSignal ? ` ${intentSignal}.` : ""}`;

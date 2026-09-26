@@ -14,7 +14,7 @@ const topicKeywords: Record<string, string[]> = {
     "training", "physique", "diet", "calories", "strength", "cardio", "muscle", "metabolism",
     "zdrowie", "fitness", "trening", "siłownia", "sylwetka", "odchudzanie", "redukcja", "mięśnie", "metamorfoza", "przemiana"
   ],
-  gaming: ["gaming", "game", "games", "playstation", "xbox", "nintendo"],
+  gaming: ["gaming", "gameplay", "video game", "video games", "playstation", "xbox", "nintendo", "pc gaming", "steam", "gta", "minecraft", "fortnite", "roblox", "esports"],
   music: ["music", "song", "album", "piano", "guitar", "concert"],
   culture: ["culture", "society", "film", "cinema", "book", "philosophy"],
   travel: ["travel", "city", "country", "trip", "guide", "prague"],
@@ -47,7 +47,15 @@ export function classifyVideo(item: youtube_v3.Schema$Video) {
   const live = item.snippet?.liveBroadcastContent && item.snippet.liveBroadcastContent !== "none";
   const podcastWords = ["podcast", "interview", "conversation", "talk", "rozmowa", "wywiad"];
   const format = live ? "live" : durationSeconds <= 180 ? "short" : durationSeconds >= 1200 && podcastWords.some((word) => text.includes(word)) ? "podcast" : "standard";
-  const topics = classifyTopicsFromText(text);
+  const categoryTopics: Record<string, string[]> = {
+    "17": ["health"],
+    "20": ["gaming"],
+    "10": ["music"]
+  };
+  const topics = [...new Set([
+    ...classifyTopicsFromText(text),
+    ...(item.snippet?.categoryId ? categoryTopics[item.snippet.categoryId] ?? [] : [])
+  ])];
   const intents = new Set<string>();
   if (/how to|tutorial|guide|explained|jak |poradnik|dlaczego/.test(text)) intents.add("learn");
   if (/how to|fix|solve|recipe|workout|tutorial|poradnik/.test(text)) intents.add("solve");

@@ -472,7 +472,8 @@ input[type="range"] { width: 100%; height: 4px; margin: 2px 0; accent-color: var
 .profile-summary-grid > div { min-width: 0; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: #121215; }
 .profile-summary-grid span { display: block; margin-bottom: 5px; color: var(--subtle); font-size: 8px; font-weight: 700; text-transform: uppercase; }
 .profile-summary-grid p { overflow: hidden; margin: 0; color: #d3d3d7; font-size: 10px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
-.edit-profile { width: 100%; margin-top: 10px; }
+.profile-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+.profile-actions .button { min-width: 0; }
 
 /* Onboarding */
 .onboarding-backdrop { position: fixed; inset: 0; z-index: 110; display: grid; place-items: center; padding: 24px; background: rgb(0 0 0 / 78%); backdrop-filter: blur(4px); }
@@ -564,6 +565,7 @@ input[type="range"] { width: 100%; height: 4px; margin: 2px 0; accent-color: var
   .composer-layout > .build-button { width: 100%; }
   .profile-summary-grid { grid-template-columns: 1fr; }
   .profile-summary-grid p { white-space: normal; }
+  .profile-actions { grid-template-columns: 1fr; }
   .onboarding-backdrop { display: block; padding: 0; background: #151519; }
   .onboarding-modal { width: 100%; height: 100%; max-height: none; border: 0; border-radius: 0; box-shadow: none; }
   .onboarding-header { min-height: 60px; padding: 0 14px; }

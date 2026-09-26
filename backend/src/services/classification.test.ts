@@ -43,4 +43,17 @@ describe("YouTube video classification", () => {
   it("provides broad search terms for health discovery", () => {
     expect(topicSearchTerms("health")).toEqual(expect.arrayContaining(["fitness", "bodybuilding", "weight loss", "transformation"]));
   });
+
+  it("does not classify an ordinary baseball game as gaming", () => {
+    const result = classifyVideo({
+      snippet: { title: "Parents missed his big baseball game" },
+      contentDetails: { duration: "PT12M" }
+    });
+    expect(result.topics).not.toContain("gaming");
+  });
+
+  it("uses YouTube category metadata for gaming and health", () => {
+    expect(classifyVideo({ snippet: { title: "Ranked match highlights", categoryId: "20" }, contentDetails: { duration: "PT12M" } }).topics).toContain("gaming");
+    expect(classifyVideo({ snippet: { title: "12 week progress update", categoryId: "17" }, contentDetails: { duration: "PT12M" } }).topics).toContain("health");
+  });
 });

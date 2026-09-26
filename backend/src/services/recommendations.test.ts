@@ -14,8 +14,11 @@ describe("recommendation freshness", () => {
   it("uses the selected age limit while keeping relevance ordering", () => {
     expect(youtubeSearchParameters("science learn", "en", 24, now)).toMatchObject({
       order: "relevance",
+      maxResults: 50,
       publishedAfter: "2024-09-20T12:00:00.000Z"
     });
+    expect(youtubeSearchParameters("gaming", "en", 3, now, "20")).toMatchObject({ videoCategoryId: "20" });
+    expect(youtubeSearchParameters("science", "en", 3, now)).not.toHaveProperty("videoCategoryId");
     expect(youtubeSearchParameters("science learn", "en", null, now)).not.toHaveProperty("publishedAfter");
   });
 
@@ -24,6 +27,7 @@ describe("recommendation freshness", () => {
     const legacy = createHash("sha256").update("science|en|standard").digest("hex");
     expect(current).not.toBe(legacy);
     expect(current).not.toBe(searchCacheKey("science", "en", "standard", 24));
+    expect(current).not.toBe(searchCacheKey("science", "en", "standard", 12, "20"));
   });
 
   it.each([1, 3, 6, 12, 24] as const)("enforces the %s month limit", (months) => {
