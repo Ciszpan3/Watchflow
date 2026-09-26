@@ -3,6 +3,7 @@ import { env } from "../config/env.js";
 import { db } from "../db.js";
 import { SyncStatus, VideoSource } from "../generated/prisma/enums.js";
 import { isInvalidGrant, upsertChannels, upsertVideo, videoDetails, youtubeForUser } from "./youtubeLive.js";
+import { subscriptionCandidateExpiration } from "./recommendations.js";
 
 const runningJobs = new Map<string, Promise<void>>();
 
@@ -151,7 +152,7 @@ async function runSync(userId: string, jobId: string) {
         const response = await youtube.playlistItems.list({
           playlistId,
           part: ["contentDetails"],
-          maxResults: 3
+          maxResults: 15
         }, { timeout: env.youtubeRequestTimeoutMs });
         return (response.data.items ?? [])
           .map((item) => item.contentDetails?.videoId)
@@ -165,7 +166,7 @@ async function runSync(userId: string, jobId: string) {
     const uploadVideoIds = uploadVideoIdsByChannel.flat();
     const recentItems = await videoDetails(youtube, [...new Set(uploadVideoIds)], assertActive);
     await db.syncJob.update({ where: { id: jobId }, data: { phase: "saving_candidates" } });
-    const expiresAt = new Date(Date.now() + env.syncCacheHours * 60 * 60 * 1000);
+    const expiresAt = subscriptionCandidateExpiration();
     const savedCandidates = await mapWithConcurrency(recentItems, env.syncConcurrency, async (item) => {
       assertActive();
       const video = await upsertVideo(item);

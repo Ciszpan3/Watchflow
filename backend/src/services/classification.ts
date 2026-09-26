@@ -8,13 +8,34 @@ const topicKeywords: Record<string, string[]> = {
   cooking: ["cooking", "recipe", "food", "kitchen", "bake", "ramen"],
   design: ["design", "architecture", "interior", "typography", "creative"],
   finance: ["finance", "money", "investing", "investment", "etf", "stock", "budget"],
-  health: ["health", "fitness", "workout", "mobility", "nutrition", "wellness"],
+  health: [
+    "health", "fitness", "workout", "mobility", "nutrition", "wellness", "bodybuilding", "body building",
+    "body transformation", "fitness journey", "transformation", "weight loss", "weight-loss", "fat loss", "exercise", "gym",
+    "training", "physique", "diet", "calories", "strength", "cardio", "muscle", "metabolism",
+    "zdrowie", "fitness", "trening", "siłownia", "sylwetka", "odchudzanie", "redukcja", "mięśnie", "metamorfoza", "przemiana"
+  ],
   gaming: ["gaming", "game", "games", "playstation", "xbox", "nintendo"],
   music: ["music", "song", "album", "piano", "guitar", "concert"],
   culture: ["culture", "society", "film", "cinema", "book", "philosophy"],
   travel: ["travel", "city", "country", "trip", "guide", "prague"],
   diy: ["diy", "build", "woodworking", "repair", "tools", "craft"]
 };
+
+export function classifyTopicsFromText(value: string) {
+  const text = value.toLowerCase();
+  return Object.entries(topicKeywords)
+    .filter(([, words]) => words.some((word) => containsKeyword(text, word)))
+    .map(([topic]) => topic);
+}
+
+export function topicSearchTerms(topic: string) {
+  return topicKeywords[topic] ?? [topic];
+}
+
+function containsKeyword(text: string, keyword: string) {
+  const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|[^\\p{L}\\p{N}])${escaped}(?:$|[^\\p{L}\\p{N}])`, "iu").test(text);
+}
 
 function textFor(item: youtube_v3.Schema$Video) {
   return [item.snippet?.title, item.snippet?.description, ...(item.snippet?.tags ?? [])].join(" ").toLowerCase();
@@ -26,9 +47,7 @@ export function classifyVideo(item: youtube_v3.Schema$Video) {
   const live = item.snippet?.liveBroadcastContent && item.snippet.liveBroadcastContent !== "none";
   const podcastWords = ["podcast", "interview", "conversation", "talk", "rozmowa", "wywiad"];
   const format = live ? "live" : durationSeconds <= 180 ? "short" : durationSeconds >= 1200 && podcastWords.some((word) => text.includes(word)) ? "podcast" : "standard";
-  const topics = Object.entries(topicKeywords)
-    .filter(([, words]) => words.some((word) => text.includes(word)))
-    .map(([topic]) => topic);
+  const topics = classifyTopicsFromText(text);
   const intents = new Set<string>();
   if (/how to|tutorial|guide|explained|jak |poradnik|dlaczego/.test(text)) intents.add("learn");
   if (/how to|fix|solve|recipe|workout|tutorial|poradnik/.test(text)) intents.add("solve");

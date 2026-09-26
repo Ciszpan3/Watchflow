@@ -19,17 +19,19 @@ Watchflow pomaga widzowi świadomie wybrać film pasujący do czasu, intencji i 
 
 ## Sygnały i synchronizacja
 
-Synchronizacja pobiera wszystkie dostępne subskrypcje, maksymalnie 200 ostatnich polubionych filmów oraz po trzy ostatnie materiały z maksymalnie 40 kanałów. Najpierw wybiera kanały występujące w polubieniach, a pozostałe rotuje między synchronizacjami.
+Synchronizacja pobiera wszystkie dostępne subskrypcje, maksymalnie 200 ostatnich polubionych filmów oraz po 15 ostatnich materiałów z maksymalnie 40 kanałów. Najpierw wybiera kanały występujące w polubieniach, a pozostałe rotuje między synchronizacjami. Kandydaci z subskrypcji są przechowywani przez 30 dni, więc kolejne synchronizacje budują pulę materiałów zamiast usuwać ją po sześciu godzinach.
 
 Import ma ograniczoną równoległość, limit czasu dla pojedynczych żądań YouTube oraz limit całego zadania. Przerwany proces nie może pozostawić użytkownika z trwałym stanem `RUNNING`: przy następnym uruchomieniu backend oznacza takie zadania jako nieudane i pozwala wykonać ponowną próbę.
 
 Polubienia są sygnałem gustu, a nie osobnym źródłem kandydatów. Historia oglądania i Watch Later pozostają niedostępne przez YouTube Data API.
 
-Nowi twórcy są wyszukiwani maksymalnie dla dwóch języków na sesję. Użytkownik wybiera ścisłe okno publikacji: 30 dni, 3, 6, 12 lub 24 miesiące albo brak limitu; domyślnie obowiązuje 12 miesięcy. Wybrane okno trafia do `publishedAfter` i klucza cache. Przy braku limitu starsze materiały są dozwolone, ale otrzymują karę wieku. Wyniki `search.list` są przechowywane przez 12 godzin. Atomowy licznik zatrzymuje aplikację przy 80 wywołaniach dziennie, pozostawiając margines bezpieczeństwa.
+Nowi twórcy są wyszukiwani maksymalnie dla dwóch języków na sesję. Zapytanie używa rozszerzonego słownika pojęć dla wybranego tematu, a limit publikacji wynosi: 30 dni, 3, 6, 12 lub 24 miesiące albo brak limitu; domyślnie obowiązuje 12 miesięcy. Wybrane okno trafia do `publishedAfter` i klucza cache. Przy braku limitu starsze materiały są dozwolone, ale otrzymują karę wieku. Wyniki `search.list` są przechowywane przez 12 godzin. Atomowy licznik zatrzymuje aplikację przy 80 wywołaniach dziennie, pozostawiając margines bezpieczeństwa. Odkrywanie nowych twórców wymaga domyślnie co najmniej 1000 wyświetleń (`MINIMUM_NEW_CREATOR_VIEWS`); ten próg nie dotyczy kanałów, które użytkownik świadomie subskrybuje.
 
 ## Ranking
 
-Ranking jest deterministyczny:
+Ranking jest deterministyczny. Temat filmu jest wyznaczany z tytułu, opisu, tagów oraz kontekstu kanału, czyli jego nazwy i opisu. Dzięki temu wybór `Health & fitness` obejmuje także kanały opisujące transformacje sylwetki bez słowa „health” w każdym tytule.
+
+Ranking korzysta z następujących sygnałów:
 
 - intencja: do 30 punktów;
 - temat: do 25 punktów;

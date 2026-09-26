@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyVideo } from "./classification.js";
+import { classifyTopicsFromText, classifyVideo, topicSearchTerms } from "./classification.js";
 
 describe("YouTube video classification", () => {
   it("recognizes a short from duration and preserves Polish language", () => {
@@ -29,5 +29,18 @@ describe("YouTube video classification", () => {
     });
     expect(result.format).toBe("live");
     expect(result.intents).toContain("company");
+  });
+
+  it("recognizes a body transformation channel even when the video title is generic", () => {
+    const result = classifyVideo({
+      snippet: { title: "12 week transformation update", description: "Bodybuilding, weight loss and a complete fitness journey." },
+      contentDetails: { duration: "PT18M" }
+    });
+    expect(result.topics).toContain("health");
+    expect(classifyTopicsFromText("Body transformation and strength training")).toContain("health");
+  });
+
+  it("provides broad search terms for health discovery", () => {
+    expect(topicSearchTerms("health")).toEqual(expect.arrayContaining(["fitness", "bodybuilding", "weight loss", "transformation"]));
   });
 });

@@ -5,6 +5,7 @@ import { VideoSource } from "../generated/prisma/enums.js";
 import type { Video, Channel, Prisma } from "../generated/prisma/client.js";
 import { isRecommendationRequest, type RecommendationRequest, type ViewerProfileInput } from "../viewer/contracts.js";
 import { serializeProfile } from "../viewer/profile.js";
+import { classifyTopicsFromText, topicSearchTerms } from "./classification.js";
 import { upsertVideo, videoDetails, youtubeForUser } from "./youtubeLive.js";
 
 type Candidate = { source: VideoSource; video: Video & { channel: Channel } };
@@ -27,8 +28,16 @@ async function reserveSearchCall() {
   return reserved.count === 1;
 }
 
-const freshnessCacheVersion = "age-control-v3";
+const freshnessCacheVersion = "coverage-v4";
 const dayMs = 86_400_000;
+
+export function subscriptionCandidateExpiration(now = new Date()) {
+  return new Date(now.getTime() + env.subscriptionCandidateDays * dayMs);
+}
+
+export function isPopularNewCreator(viewCount: bigint | null) {
+  return Number(viewCount ?? 0) >= env.minimumNewCreatorViews;
+}
 
 function ageCutoff(maxAgeMonths: RecommendationRequest["maxAgeMonths"], now = new Date()) {
   if (maxAgeMonths === null) return null;
@@ -63,8 +72,27 @@ async function searchNewVideos(userId: string, request: RecommendationRequest, p
   const subscribedChannels = new Set(subscriptions.map((item) => item.channelId));
   let quotaLimited = false;
 
+  async function saveSearchCandidates(videoIds: string[]) {
+    if (!videoIds.length) return;
+    const videos = await db.video.findMany({ where: { id: { in: videoIds } }, select: { id: true, channelId: true } });
+    const newExpiresAt = new Date(Date.now() + env.searchCacheHours * 60 * 60 * 1000);
+    const subscribedExpiresAt = subscriptionCandidateExpiration();
+    for (const video of videos) {
+      const subscribed = subscribedChannels.has(video.channelId);
+      if (subscribed) {
+        await db.userVideoCandidate.deleteMany({ where: { userId, videoId: video.id, source: VideoSource.NEW } });
+      }
+      await db.userVideoCandidate.upsert({
+        where: { userId_videoId_source: { userId, videoId: video.id, source: subscribed ? VideoSource.SUBSCRIBED : VideoSource.NEW } },
+        update: { discoveredAt: new Date(), expiresAt: subscribed ? subscribedExpiresAt : newExpiresAt },
+        create: { userId, videoId: video.id, source: subscribed ? VideoSource.SUBSCRIBED : VideoSource.NEW, expiresAt: subscribed ? subscribedExpiresAt : newExpiresAt }
+      });
+    }
+  }
+
   for (const language of languages) {
-    const query = `${topics.join("|") || "interesting documentary"} ${request.intent}`.trim();
+    const queryTerms = topics.flatMap(topicSearchTerms).slice(0, 10);
+    const query = `${queryTerms.join("|") || "interesting documentary"} ${request.intent}`.trim();
     const key = searchCacheKey(query, language, request.formats.length === 1 ? request.formats[0] : undefined, request.maxAgeMonths);
     const cached = await db.searchCache.findUnique({ where: { cacheKey: key } });
     let ids = cached && cached.expiresAt > new Date() ? cached.videoIds : [];
@@ -77,10 +105,8 @@ async function searchNewVideos(userId: string, request: RecommendationRequest, p
       const response = await youtube.search.list(youtubeSearchParameters(query, language, request.maxAgeMonths), { timeout: env.youtubeRequestTimeoutMs });
       ids = (response.data.items ?? []).map((item) => item.id?.videoId).filter((id): id is string => Boolean(id));
       const details = await videoDetails(youtube, ids);
-      ids = [];
       for (const item of details) {
-        const video = await upsertVideo(item);
-        if (video && !subscribedChannels.has(video.channelId)) ids.push(video.id);
+        await upsertVideo(item);
       }
       await db.searchCache.upsert({
         where: { cacheKey: key },
@@ -88,14 +114,7 @@ async function searchNewVideos(userId: string, request: RecommendationRequest, p
         create: { cacheKey: key, query, language, format: request.formats.length === 1 ? request.formats[0] : null, videoIds: ids, expiresAt: new Date(Date.now() + env.searchCacheHours * 60 * 60 * 1000) }
       });
     }
-    const expiresAt = new Date(Date.now() + env.searchCacheHours * 60 * 60 * 1000);
-    for (const videoId of ids) {
-      await db.userVideoCandidate.upsert({
-        where: { userId_videoId_source: { userId, videoId, source: VideoSource.NEW } },
-        update: { discoveredAt: new Date(), expiresAt },
-        create: { userId, videoId, source: VideoSource.NEW, expiresAt }
-      });
-    }
+    await saveSearchCandidates(ids);
   }
   return quotaLimited;
 }
@@ -124,6 +143,7 @@ export function fitTier(score: number) {
 }
 
 export function serializeVideo(video: Video & { channel: Channel }, source: "subscribed" | "new", score = 0, reason = "Saved from a previous session.", signals: string[] = []) {
+  const topics = [...new Set([...video.topics, ...classifyTopicsFromText(`${video.channel.title} ${video.channel.description ?? ""}`)])];
   return {
     id: video.id,
     title: video.title,
@@ -136,7 +156,7 @@ export function serializeVideo(video: Video & { channel: Channel }, source: "sub
     intents: video.intents,
     source,
     channelSubscribed: source === "subscribed",
-    topics: video.topics,
+    topics,
     language: video.language === "pl" ? "pl" : "en",
     format: video.format,
     likedAffinity: 0,
@@ -202,6 +222,10 @@ function durationFit(duration: number, request: RecommendationRequest) {
     return distance <= tolerance ? 15 - (distance / tolerance) * 5 : Math.max(0, 10 - (distance - tolerance));
   }
   return Math.max(0, 15 - Math.max(0, duration - request.minutes) * 2);
+}
+
+function effectiveTopics(video: Video & { channel: Channel }) {
+  return [...new Set([...video.topics, ...classifyTopicsFromText(`${video.channel.title} ${video.channel.description ?? ""}`)])];
 }
 
 function selectCandidates(scored: ScoredCandidate[], request: RecommendationRequest) {
@@ -308,26 +332,28 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
   const scored = candidates.flatMap((candidate) => {
     const source = candidate.source === VideoSource.SUBSCRIBED ? "subscribed" : "new";
     const video = candidate.video;
+    const topics = effectiveTopics(video);
     const freshness = freshnessForVideo(video.publishedAt, request.maxAgeMonths);
     if (excludedVideoIds.has(video.id)) return [];
     if (!freshness.allowed) return [];
     if (request.source !== "mixed" && request.source !== source) return [];
+    if (source === "new" && !isPopularNewCreator(video.viewCount)) return [];
     if (!request.formats.includes(video.format as never) || !request.languages.includes((video.language === "pl" ? "pl" : "en") as never)) return [];
-    if (request.topics.length && !overlap(video.topics, request.topics).length) return [];
-    if (overlap(video.topics, profile.excludedTopics).length) return [];
+    if (request.topics.length && !overlap(topics, request.topics).length) return [];
+    if (overlap(topics, profile.excludedTopics).length) return [];
     if (request.audioFriendly && !video.audioFriendly) return [];
 
-    const topicMatches = overlap(video.topics, requestedTopics);
+    const topicMatches = overlap(topics, requestedTopics);
     const intentScore = video.intents.includes(request.intent) ? 30 : 0;
     const topicScore = topicMatches.length ? 25 : 0;
-    const affinityRaw = overlap(video.topics, likedTopics).length * 12
+    const affinityRaw = overlap(topics, likedTopics).length * 12
       + (likedChannels.has(video.channelId) ? 28 : 0)
-      + overlap(video.topics, openedTopics).length * 4
-      + overlap(video.topics, savedTopics).length * 6;
+      + overlap(topics, openedTopics).length * 4
+      + overlap(topics, savedTopics).length * 6;
     const affinityScore = profile.useLikedVideos ? Math.min(20, affinityRaw / 5) : 10;
     const durationMinutes = Math.max(1, Math.ceil(video.durationSeconds / 60));
     const durationScore = durationFit(durationMinutes, request);
-    const feedbackPenalty = overlap(video.topics, dislikedTopics).length * 12
+    const feedbackPenalty = overlap(topics, dislikedTopics).length * 12
       + (repeatedChannels.has(video.channelId) ? 18 : 0)
       + (avoidLong && durationMinutes > 30 ? 12 : 0)
       + (request.antiClickbait ? video.clickbaitScore * 0.15 : 0);

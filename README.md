@@ -9,8 +9,10 @@ Projekt jest pełnostackową aplikacją portfolio: łączy bezpieczne Google OAu
 - logowanie Google i trwała sesja w cookie `HttpOnly`;
 - szyfrowanie refresh tokenów AES-256-GCM wyłącznie na backendzie;
 - trwały profil zainteresowań i onboarding w PostgreSQL;
-- synchronizacja subskrypcji, maksymalnie 200 polubień oraz ostatnich filmów z wybranych subskrybowanych kanałów;
+- synchronizacja subskrypcji, maksymalnie 200 polubień oraz 15 ostatnich filmów z wybranych subskrybowanych kanałów;
 - wyszukiwanie nowych twórców z 12-godzinnym cache i dziennym limitem bezpieczeństwa;
+- rozszerzona klasyfikacja tematów korzystająca także z nazwy i opisu kanału, dzięki czemu kanał poświęcony transformacji sylwetki może pasować do `Health & fitness`;
+- próg jakości dla odkrywania nowych twórców, który chroni wyniki przed materiałami z przypadkowymi, pojedynczymi wyświetleniami; filmy z subskrypcji pozostają dostępne niezależnie od ich popularności;
 - kontrola wieku filmu: 30 dni, 3, 6, 12 lub 24 miesiące albo brak limitu; domyślnie 12 miesięcy;
 - dwa tryby rekomendacji: sesja do trzech filmów mieszcząca się w łącznym limicie albo pięć alternatyw pojedynczego filmu;
 - opcjonalny limit czasu od 5 do 180 minut, wymagane filtry języka i formatu oraz wybór źródła;

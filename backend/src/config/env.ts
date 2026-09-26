@@ -15,12 +15,14 @@ export const env = {
   sessionCookieName: process.env.SESSION_COOKIE_NAME ?? "watchflow_session",
   sessionTtlDays: Number(process.env.SESSION_TTL_DAYS ?? 30),
   syncCacheHours: Number(process.env.SYNC_CACHE_HOURS ?? 6),
+  subscriptionCandidateDays: Number(process.env.SUBSCRIPTION_CANDIDATE_DAYS ?? 30),
   syncCooldownMinutes: Number(process.env.SYNC_COOLDOWN_MINUTES ?? 15),
   syncJobTimeoutMinutes: Number(process.env.SYNC_JOB_TIMEOUT_MINUTES ?? 5),
   syncConcurrency: Number(process.env.SYNC_CONCURRENCY ?? 5),
   youtubeRequestTimeoutMs: Number(process.env.YOUTUBE_REQUEST_TIMEOUT_MS ?? 15_000),
   searchCacheHours: Number(process.env.SEARCH_CACHE_HOURS ?? 12),
-  searchDailyLimit: Number(process.env.SEARCH_DAILY_LIMIT ?? 80)
+  searchDailyLimit: Number(process.env.SEARCH_DAILY_LIMIT ?? 80),
+  minimumNewCreatorViews: Number(process.env.MINIMUM_NEW_CREATOR_VIEWS ?? 1000)
 };
 
 export function hasGoogleOAuthConfig() {

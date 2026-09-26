@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { fitTier, freshnessForVideo, freshnessReason, searchCacheKey, youtubeSearchParameters } from "./recommendations.js";
+import { fitTier, freshnessForVideo, freshnessReason, isPopularNewCreator, searchCacheKey, subscriptionCandidateExpiration, youtubeSearchParameters } from "./recommendations.js";
 
 const now = new Date("2026-09-20T12:00:00.000Z");
 
@@ -44,5 +44,15 @@ describe("recommendation freshness", () => {
     expect(fitTier(74)).toBe("strong");
     expect(fitTier(59)).toBe("good");
     expect(fitTier(44)).toBe("exploratory");
+  });
+
+  it("keeps low-view discovery out while allowing trusted subscriptions", () => {
+    expect(isPopularNewCreator(999n)).toBe(false);
+    expect(isPopularNewCreator(1000n)).toBe(true);
+  });
+
+  it("keeps subscription candidates available longer than a sync cache", () => {
+    const start = new Date("2026-09-20T12:00:00.000Z");
+    expect(subscriptionCandidateExpiration(start).getTime() - start.getTime()).toBe(30 * 86_400_000);
   });
 });
