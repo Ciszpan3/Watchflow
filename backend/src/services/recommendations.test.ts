@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { discoverySearchQuery, fitTier, freshnessForVideo, freshnessReason, historyAffinity, historyTermsForSearch, isPopularNewCreator, searchCacheKey, searchDurationForFormats, subscriptionCandidateExpiration, topicCategoryMismatch, youtubeSearchParameters } from "./recommendations.js";
+import { buildDiscoveryLanes, creatorFamilyName, discoveryLaneCapacity, discoverySearchQuery, fitTier, freshnessForVideo, freshnessReason, gamingInterestKeys, historyAffinity, historyTermsForSearch, isLowTrustDiscoveryTitle, isPopularNewCreator, searchCacheKey, searchDurationForFormats, subscriptionCandidateExpiration, topicCategoryMismatch, youtubeSearchParameters } from "./recommendations.js";
 
 const now = new Date("2026-09-20T12:00:00.000Z");
 
@@ -117,5 +117,75 @@ describe("recommendation freshness", () => {
     expect(historyAffinity({ ...video, title: "Minecraft survival ideas" }, ["gaming"], [
       { title: "Minecraft survival building", channelTitle: "Block Lab", topics: ["gaming"] }
     ], ["minecraft"])).toMatchObject({ matched: true, anchor: "minecraft" });
+  });
+
+  it("builds creator-led discovery lanes from history and subscriptions", () => {
+    const history = [
+      ...Array.from({ length: 7 }, (_, index) => ({ title: `Variety challenge ${index}`, channelTitle: "Variety Crew", topics: ["gaming"], origin: "history" as const })),
+      ...Array.from({ length: 6 }, (_, index) => ({ title: `Minecraft trap ${index}`, channelTitle: "Block Builder", topics: ["gaming"], origin: "history" as const })),
+      ...Array.from({ length: 5 }, (_, index) => ({ title: `CS2 clutch ${index}`, channelTitle: "Tactical Player", topics: ["gaming"], origin: "history" as const })),
+      ...Array.from({ length: 4 }, (_, index) => ({ title: `Bloons BTD6 challenge ${index}`, channelTitle: "Tower Expert", topics: ["gaming"], origin: "history" as const }))
+    ];
+    const subscriptions = Array.from({ length: 4 }, (_, index) => ({
+      title: `Brawl Stars ranked ${index}`,
+      channelTitle: "Arena Guide",
+      topics: ["gaming"],
+      origin: "subscription" as const
+    }));
+    const lanes = buildDiscoveryLanes([...history, ...subscriptions], ["gaming"], new Set(["arenaguide"]));
+    expect(lanes).toHaveLength(5);
+    expect(lanes.map((lane) => lane.label)).toEqual(expect.arrayContaining(["Variety Crew", "Block Builder", "Tactical Player", "Tower Expert", "Arena Guide"]));
+    expect(new Set(lanes.map((lane) => lane.key)).size).toBe(5);
+    expect(lanes.find((lane) => lane.label === "Arena Guide")?.source).toBe("subscription");
+    expect(lanes.find((lane) => lane.label === "Arena Guide")?.interestKeys).toContain("brawl-stars");
+  });
+
+  it("uses metadata to build multi-game profiles for subscribed creators", () => {
+    const signals = [
+      ...Array.from({ length: 4 }, (_, index) => ({
+        title: `Ranked match ${index}`,
+        channelTitle: "Mobile Tactics",
+        topics: ["gaming"],
+        origin: "subscription" as const,
+        metadataText: "#clashroyale"
+      })),
+      ...Array.from({ length: 4 }, (_, index) => ({
+        title: `Ranked challenge ${index}`,
+        channelTitle: "Mobile Tactics",
+        topics: ["gaming"],
+        origin: "subscription" as const,
+        metadataText: "#brawlstars"
+      }))
+    ];
+    const lane = buildDiscoveryLanes(signals, ["gaming"], new Set(["mobiletactics"]))[0];
+    expect(lane?.interestKeys).toEqual(expect.arrayContaining(["clash-royale", "brawl-stars"]));
+    expect(lane?.query).toContain("clash royale|brawl stars");
+  });
+
+  it("recognizes alternate channels from the same creator family", () => {
+    expect(creatorFamilyName("Mehalic POPs")).toBe(creatorFamilyName("More Mehalic"));
+    expect(creatorFamilyName("SMii7Y")).toBe(creatorFamilyName("SMii7Yplus"));
+    expect(creatorFamilyName("JudeHigh")).toBe(creatorFamilyName("JudeLow"));
+  });
+
+  it("recognizes game-specific metadata instead of treating all gaming as equivalent", () => {
+    expect(gamingInterestKeys("#clashroyale xbow strategy")).toContain("clash-royale");
+    expect(gamingInterestKeys("#brawlstars ranked match")).toContain("brawl-stars");
+    expect(gamingInterestKeys("generic Roblox episode")).not.toEqual(expect.arrayContaining(["clash-royale", "brawl-stars"]));
+  });
+
+  it("reserves room for every active discovery lane", () => {
+    expect(discoveryLaneCapacity(10, 5)).toBe(2);
+    expect(discoveryLaneCapacity(5, 4)).toBe(2);
+    expect(discoveryLaneCapacity(3, 5)).toBe(1);
+    expect(discoveryLaneCapacity(10, 1)).toBe(10);
+  });
+
+  it("filters recurring low-trust discovery patterns when anti-clickbait is enabled", () => {
+    expect(isLowTrustDiscoveryTitle("GOOD BOY VS BAD BOY - Slow English Episode 47")).toBe(true);
+    expect(isLowTrustDiscoveryTitle("Skibidi Soundwave - Season 7")).toBe(true);
+    expect(isLowTrustDiscoveryTitle("JJ adventure - Minecraft Animation", "MS Toons")).toBe(true);
+    expect(isLowTrustDiscoveryTitle("Minecraft redstone explained", "Block Lab")).toBe(false);
+    expect(isLowTrustDiscoveryTitle("A thoughtful Counter-Strike documentary")).toBe(false);
   });
 });
