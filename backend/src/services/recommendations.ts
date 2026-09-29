@@ -28,15 +28,21 @@ async function reserveSearchCall() {
   return reserved.count === 1;
 }
 
-const freshnessCacheVersion = "coverage-v5";
+const freshnessCacheVersion = "personalized-v12";
+const recommendationAlgorithmVersion = "personalized-v12";
 const dayMs = 86_400_000;
 
 export function subscriptionCandidateExpiration(now = new Date()) {
   return new Date(now.getTime() + env.subscriptionCandidateDays * dayMs);
 }
 
-export function isPopularNewCreator(viewCount: bigint | null) {
-  return Number(viewCount ?? 0) >= env.minimumNewCreatorViews;
+export function isPopularNewCreator(viewCount: bigint | null, likeCount: bigint | null = null) {
+  const views = Number(viewCount ?? 0);
+  const likes = Number(likeCount ?? 0);
+  const minimumViews = Math.max(25_000, env.minimumNewCreatorViews);
+  if (views < minimumViews) return false;
+  if (views >= 100_000) return true;
+  return likes >= 500 || (views > 0 && likes / views >= 0.015);
 }
 
 const intentSearchTerms: Record<RecommendationRequest["intent"], string[]> = {
@@ -55,24 +61,33 @@ function ageCutoff(maxAgeMonths: RecommendationRequest["maxAgeMonths"], now = ne
   return cutoff;
 }
 
-export function searchCacheKey(query: string, language: string, format: string | undefined, maxAgeMonths: RecommendationRequest["maxAgeMonths"] = 12, categoryId?: string) {
-  return createHash("sha256").update(`${freshnessCacheVersion}|${maxAgeMonths ?? "any"}|${query}|${language}|${format ?? "any"}|${categoryId ?? "any"}`).digest("hex");
+export function searchCacheKey(query: string, language: string, format: string | undefined, maxAgeMonths: RecommendationRequest["maxAgeMonths"] = 12, categoryId?: string, videoDuration?: string, order = "relevance") {
+  return createHash("sha256").update(`${freshnessCacheVersion}|${maxAgeMonths ?? "any"}|${query}|${language}|${format ?? "any"}|${categoryId ?? "any"}|${videoDuration ?? "any"}|${order}`).digest("hex");
 }
 
-export function youtubeSearchParameters(query: string, language: string, maxAgeMonths: RecommendationRequest["maxAgeMonths"] = 12, now = new Date(), categoryId?: string) {
+export function youtubeSearchParameters(query: string, language: string, maxAgeMonths: RecommendationRequest["maxAgeMonths"] = 12, now = new Date(), categoryId?: string, videoDuration?: "short" | "medium" | "long", order: "relevance" | "viewCount" = "relevance") {
   const cutoff = ageCutoff(maxAgeMonths, now);
   return {
     part: ["snippet"] as "snippet"[],
     q: query,
     type: ["video"] as "video"[],
     maxResults: 50,
-    order: "relevance" as const,
+    order,
     relevanceLanguage: language,
     safeSearch: "moderate" as const,
     videoEmbeddable: "true" as const,
     ...(categoryId ? { videoCategoryId: categoryId } : {}),
+    ...(videoDuration ? { videoDuration } : {}),
     ...(cutoff ? { publishedAfter: cutoff.toISOString() } : {})
   };
+}
+
+export function searchDurationForFormats(formats: RecommendationRequest["formats"], variant: number) {
+  if (formats.length !== 1) return undefined;
+  if (formats[0] === "short") return "short" as const;
+  if (formats[0] === "podcast") return "long" as const;
+  if (formats[0] === "standard") return variant === 0 ? "medium" as const : "long" as const;
+  return undefined;
 }
 
 type WatchHistorySignal = { title: string; channelTitle: string | null; topics: string[]; watchedAt?: Date };
@@ -85,8 +100,10 @@ async function searchNewVideos(userId: string, request: RecommendationRequest, p
   const categoryId = topics.includes("gaming") ? "20" : undefined;
   const historyTerms = profile.useWatchHistory ? historyTermsForSearch(historyRows, topics) : [];
   let quotaLimited = false;
+  const candidateVideoIds = new Set<string>();
+  const intentVideoIds = new Set<string>();
 
-  async function saveSearchCandidates(videoIds: string[]) {
+  async function saveSearchCandidates(videoIds: string[], intentFocused: boolean) {
     if (!videoIds.length) return;
     const videos = await db.video.findMany({ where: { id: { in: videoIds } }, select: { id: true, channelId: true } });
     const newExpiresAt = new Date(Date.now() + env.searchCacheHours * 60 * 60 * 1000);
@@ -101,13 +118,22 @@ async function searchNewVideos(userId: string, request: RecommendationRequest, p
         update: { discoveredAt: new Date(), expiresAt: subscribed ? subscribedExpiresAt : newExpiresAt },
         create: { userId, videoId: video.id, source: subscribed ? VideoSource.SUBSCRIBED : VideoSource.NEW, expiresAt: subscribed ? subscribedExpiresAt : newExpiresAt }
       });
+      if (!subscribed) {
+        candidateVideoIds.add(video.id);
+        if (intentFocused) intentVideoIds.add(video.id);
+      }
     }
   }
 
-  for (const language of languages) {
-    const queryTerms = topics.flatMap(topicSearchTerms).slice(0, 6);
-    const query = `${queryTerms.join(" ")} ${historyTerms.join(" ")} ${intentSearchTerms[request.intent].slice(0, 2).join(" ")}`.trim() || "interesting documentary";
-    const key = searchCacheKey(query, language, request.formats.length === 1 ? request.formats[0] : undefined, request.maxAgeMonths, categoryId);
+  const searchPlans = languages.length === 1 && request.formats.length === 1 && request.formats[0] === "standard"
+    ? [{ language: languages[0], index: 0 }, { language: languages[0], index: 1 }]
+    : languages.map((language, index) => ({ language, index }));
+
+  for (const { language, index } of searchPlans) {
+    const query = discoverySearchQuery(topics, historyTerms, request.intent, index);
+    const videoDuration = searchDurationForFormats(request.formats, index);
+    const order = index === 0 ? "viewCount" as const : "relevance" as const;
+    const key = searchCacheKey(query, language, request.formats.length === 1 ? request.formats[0] : undefined, request.maxAgeMonths, categoryId, videoDuration, order);
     const cached = await db.searchCache.findUnique({ where: { cacheKey: key } });
     let ids = cached && cached.expiresAt > new Date() ? cached.videoIds : [];
     if (!ids.length) {
@@ -116,8 +142,20 @@ async function searchNewVideos(userId: string, request: RecommendationRequest, p
         continue;
       }
       const youtube = await youtubeForUser(userId);
-      const response = await youtube.search.list(youtubeSearchParameters(query, language, request.maxAgeMonths, new Date(), categoryId), { timeout: env.youtubeRequestTimeoutMs });
+      const parameters = youtubeSearchParameters(query, language, request.maxAgeMonths, new Date(), categoryId, videoDuration, order);
+      const response = await youtube.search.list(parameters, { timeout: env.youtubeRequestTimeoutMs });
       ids = (response.data.items ?? []).map((item) => item.id?.videoId).filter((id): id is string => Boolean(id));
+      if (index === 0 && response.data.nextPageToken) {
+        if (await reserveSearchCall()) {
+          const nextResponse = await youtube.search.list({ ...parameters, pageToken: response.data.nextPageToken }, { timeout: env.youtubeRequestTimeoutMs });
+          ids = [...new Set([
+            ...ids,
+            ...(nextResponse.data.items ?? []).map((item) => item.id?.videoId).filter((id): id is string => Boolean(id))
+          ])];
+        } else {
+          quotaLimited = true;
+        }
+      }
       const details = await videoDetails(youtube, ids);
       for (const item of details) {
         await upsertVideo(item);
@@ -128,9 +166,9 @@ async function searchNewVideos(userId: string, request: RecommendationRequest, p
         create: { cacheKey: key, query, language, format: request.formats.length === 1 ? request.formats[0] : null, videoIds: ids, expiresAt: new Date(Date.now() + env.searchCacheHours * 60 * 60 * 1000) }
       });
     }
-    await saveSearchCandidates(ids);
+    await saveSearchCandidates(ids, index > 0);
   }
-  return quotaLimited;
+  return { quotaLimited, candidateVideoIds, intentVideoIds };
 }
 
 function overlap(left: string[], right: string[]) {
@@ -229,6 +267,12 @@ function normalizeStoredRequest(value: Prisma.JsonValue): RecommendationRequest 
   return isRecommendationRequest(legacy) ? legacy : null;
 }
 
+function storedAlgorithmVersion(value: Prisma.JsonValue) {
+  return value && typeof value === "object" && !Array.isArray(value) && "algorithmVersion" in value
+    ? value.algorithmVersion
+    : null;
+}
+
 function sourceOrder(request: RecommendationRequest) {
   const count = request.resultCount;
   if (request.source !== "mixed") return Array.from({ length: count }, () => request.source as "subscribed" | "new");
@@ -258,8 +302,9 @@ function effectiveTopics(video: Video & { channel: Channel }) {
   ])];
 }
 
-function topicCategoryMismatch(video: Video, requestedTopics: string[]) {
-  return video.categoryId === "20" && requestedTopics.length > 0 && !requestedTopics.includes("gaming");
+export function topicCategoryMismatch(video: Pick<Video, "categoryId">, requestedTopics: string[]) {
+  if (requestedTopics.includes("gaming")) return video.categoryId !== "20";
+  return video.categoryId === "20" && requestedTopics.length > 0;
 }
 
 function popularityScore(video: Video, source: "subscribed" | "new") {
@@ -273,7 +318,8 @@ function popularityScore(video: Video, source: "subscribed" | "new") {
 
 const historyStopWords = new Set([
   "about", "after", "before", "could", "from", "have", "into", "just", "that", "their", "there", "this", "what", "when", "with",
-  "your", "youtube", "watch", "video", "film", "the", "and", "for", "how", "one", "you", "are", "was", "were", "they", "them"
+  "your", "youtube", "watch", "watched", "video", "film", "the", "and", "for", "how", "one", "you", "are", "was", "were", "they", "them",
+  "obejrzano", "oglądano", "gaming", "game", "games", "gameplay", "official", "episode", "part", "live", "shorts"
 ]);
 
 function titleWords(value: string) {
@@ -293,18 +339,33 @@ export function historyTermsForSearch(rows: WatchHistorySignal[], requestedTopic
   return (repeated.length ? repeated : ranked).slice(0, 4);
 }
 
-function historyAffinity(video: Video & { channel: Channel }, candidateTopics: string[], rows: WatchHistorySignal[]) {
-  if (!rows.length) return { score: 0, matched: false };
+export function discoverySearchQuery(topics: string[], historyTerms: string[], intent: RecommendationRequest["intent"], variant = 0) {
+  const topic = topics[0] ?? "interesting documentary";
+  const specificTopicTerms = topicSearchTerms(topic).filter((term) => term !== topic && !historyStopWords.has(term));
+  const anchors = (historyTerms.length ? historyTerms : specificTopicTerms).slice(0, 3);
+  const broadAnchor = anchors.length ? anchors.join("|") : topic;
+  const focusedAnchor = anchors[0] ?? topic;
+  const intentTerms = intentSearchTerms[intent];
+  const intentTerm = intentTerms[variant % intentTerms.length];
+  return variant === 0 ? `${broadAnchor} ${topic}`.trim() : `${focusedAnchor} ${intentTerm} ${topic}`.trim();
+}
+
+export function historyAffinity(video: Video & { channel: Channel }, candidateTopics: string[], rows: WatchHistorySignal[], anchors: string[] = []) {
+  if (!rows.length) return { score: 0, matched: false, anchor: null as string | null };
   const videoWords = titleWords(`${video.title} ${video.channel.title}`);
+  const matchedAnchor = anchors.find((anchor) => videoWords.has(anchor.toLowerCase())) ?? null;
   let best = 0;
+  let hasSpecificMatch = Boolean(matchedAnchor);
   for (const row of rows) {
     const sameChannel = Boolean(row.channelTitle && row.channelTitle.toLowerCase() === video.channel.title.toLowerCase());
     const sharedWords = [...titleWords(`${row.title} ${row.channelTitle ?? ""}`)].filter((word) => videoWords.has(word));
     const sharedTopics = overlap(candidateTopics, row.topics);
-    const score = (sameChannel ? 16 : 0) + Math.min(10, sharedWords.length * 5) + Math.min(6, sharedTopics.length * 3);
+    const specificScore = (sameChannel ? 16 : 0) + Math.min(12, sharedWords.length * 6) + (matchedAnchor ? 10 : 0);
+    const score = specificScore + Math.min(3, sharedTopics.length);
     best = Math.max(best, score);
+    hasSpecificMatch ||= sameChannel || sharedWords.length >= 2;
   }
-  return { score: best, matched: best >= 8 };
+  return { score: best, matched: hasSpecificMatch, anchor: matchedAnchor };
 }
 
 function titleSimilarity(left: string, right: string) {
@@ -340,20 +401,14 @@ function selectCandidates(scored: ScoredCandidate[], request: RecommendationRequ
     });
     const next = options.find((item) => {
       if (selected.some((picked) => picked.candidate.video.id === item.candidate.video.id)) return false;
-      if (desiredSource === "new" && selected.filter((picked) => picked.candidate.source === VideoSource.NEW && picked.candidate.video.channelId === item.candidate.video.channelId).length >= 2) return false;
+      if (item.candidate.source === VideoSource.NEW && selected.filter((picked) => picked.candidate.source === VideoSource.NEW && picked.candidate.video.channelId === item.candidate.video.channelId).length >= 2) return false;
       return request.recommendationMode === "single"
         || !request.timeLimitEnabled
         || totalMinutes + item.durationMinutes <= request.minutes;
     });
-    const fallbackNext = next ?? options.find((item) => {
-      if (selected.some((picked) => picked.candidate.video.id === item.candidate.video.id)) return false;
-      return request.recommendationMode === "single"
-        || !request.timeLimitEnabled
-        || totalMinutes + item.durationMinutes <= request.minutes;
-    });
-    if (!fallbackNext) continue;
-    selected.push(fallbackNext);
-    totalMinutes += fallbackNext.durationMinutes;
+    if (!next) continue;
+    selected.push(next);
+    totalMinutes += next.durationMinutes;
   }
   return selected;
 }
@@ -402,10 +457,22 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
   const profile = serializeProfile(storedProfile);
   const historyRows = await db.watchHistoryItem.findMany({ where: { userId }, orderBy: { watchedAt: "desc" }, take: 5000 });
   let quotaLimited = false;
-  if (request.source !== "subscribed") quotaLimited = await searchNewVideos(userId, request, profile, historyRows);
+  let currentNewVideoIds = new Set<string>();
+  let currentIntentVideoIds = new Set<string>();
+  if (request.source !== "subscribed") {
+    const search = await searchNewVideos(userId, request, profile, historyRows);
+    quotaLimited = search.quotaLimited;
+    currentNewVideoIds = search.candidateVideoIds;
+    currentIntentVideoIds = search.intentVideoIds;
+  }
+
+  const candidateSourceFilters: Prisma.UserVideoCandidateWhereInput[] = [
+    { source: VideoSource.SUBSCRIBED },
+    ...(currentNewVideoIds.size ? [{ source: VideoSource.NEW, videoId: { in: [...currentNewVideoIds] } } as Prisma.UserVideoCandidateWhereInput] : [])
+  ];
 
   const [candidateRows, likedRows, feedbackRows, activityRows, savedRows] = await Promise.all([
-    db.userVideoCandidate.findMany({ where: { userId, expiresAt: { gt: new Date() } }, include: { video: { include: { channel: true } } } }),
+    db.userVideoCandidate.findMany({ where: { userId, expiresAt: { gt: new Date() }, OR: candidateSourceFilters }, include: { video: { include: { channel: true } } } }),
     db.likedVideo.findMany({ where: { userId }, include: { video: true } }),
     db.recommendationFeedback.findMany({ where: { userId }, include: { video: true } }),
     db.viewingActivity.findMany({ where: { userId, createdAt: { gt: new Date(Date.now() - 90 * 86_400_000) } }, include: { video: true } }),
@@ -413,6 +480,7 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
   ]);
   const candidates: Candidate[] = candidateRows.map((row) => ({ source: row.source, video: row.video }));
   const requestedTopics = request.topics.length ? request.topics : [...profile.interests, ...profile.customTopics];
+  const historyAnchors = profile.useWatchHistory ? historyTermsForSearch(historyRows, requestedTopics) : [];
   const likedTopics = likedRows.flatMap((row) => row.video.topics);
   const likedChannels = new Set(likedRows.map((row) => row.video.channelId));
   const openedTopics = activityRows.filter((row) => row.type === "OPENED").flatMap((row) => row.video.topics);
@@ -433,16 +501,16 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
     const video = candidate.video;
     const topics = effectiveTopics(video);
     const freshness = freshnessForVideo(video.publishedAt, request.maxAgeMonths);
-    const history = profile.useWatchHistory ? historyAffinity(video, topics, historyRows) : { score: 0, matched: false };
+    const history = profile.useWatchHistory ? historyAffinity(video, topics, historyRows, historyAnchors) : { score: 0, matched: false, anchor: null };
     const historyTopicAnchor = profile.useWatchHistory
       && source === "new"
-      && historyRows.length >= 3
-      && historyRows.some((row) => overlap(row.topics, requestedTopics).length > 0);
+      && historyAnchors.length > 0;
     if (excludedVideoIds.has(video.id)) return [];
     if (!freshness.allowed) return [];
     if (request.source !== "mixed" && request.source !== source) return [];
-    if (source === "new" && !isPopularNewCreator(video.viewCount)) return [];
-    if (!request.formats.includes(video.format as never) || !request.languages.includes((video.language === "pl" ? "pl" : "en") as never)) return [];
+    if (source === "new" && !isPopularNewCreator(video.viewCount, video.likeCount)) return [];
+    const candidateLanguage = video.language === "pl" || video.language === "en" ? video.language : null;
+    if (!request.formats.includes(video.format as never) || !candidateLanguage || !request.languages.includes(candidateLanguage)) return [];
     if (request.topics.length && !overlap(topics, request.topics).length) return [];
     if (topicCategoryMismatch(video, request.topics.length ? request.topics : requestedTopics)) return [];
     if (overlap(topics, profile.excludedTopics).length) return [];
@@ -450,7 +518,8 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
     if (historyTopicAnchor && !history.matched) return [];
 
     const topicMatches = overlap(topics, requestedTopics);
-    const intentScore = video.intents.includes(request.intent) ? 30 : 0;
+    const intentMatch = video.intents.includes(request.intent) || currentIntentVideoIds.has(video.id);
+    const intentScore = intentMatch ? 30 : 0;
     const topicScore = topicMatches.length ? 25 : 0;
     const affinityRaw = overlap(topics, likedTopics).length * 12
       + (likedChannels.has(video.channelId) ? 28 : 0)
@@ -469,10 +538,12 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
     const match = Math.max(0, Math.min(100, Math.round(intentScore + topicScore + affinityScore + durationScore + popularity - feedbackPenalty - freshness.penalty)));
     const sourceSignal = source === "subscribed" ? "From your subscriptions" : "New creator discovery";
     const popularitySignal = source === "new" ? "Popular on YouTube" : null;
-    const tasteSignal = history.matched ? "Related to your imported watch history" : affinityRaw >= 40 ? "Strong liked-video fit" : topicMatches[0] ? `Matches your ${topicMatches[0]} interest` : null;
-    const intentSignal = video.intents.includes(request.intent) ? `Fits ${request.intent}` : null;
-    const signals = [sourceSignal, popularitySignal ?? freshness.signal, tasteSignal ?? intentSignal].filter((signal): signal is string => Boolean(signal)).slice(0, 3);
-    const reason = `${freshnessReason(source, freshness.signal)}.${tasteSignal ? ` ${tasteSignal}.` : intentSignal ? ` ${intentSignal}.` : ""}`;
+    const tasteSignal = history.matched
+      ? history.anchor ? `Similar to your ${history.anchor} viewing` : "Shares specific themes with your watch history"
+      : affinityRaw >= 40 ? "Strong liked-video fit" : topicMatches[0] ? `Matches your ${topicMatches[0]} interest` : null;
+    const intentSignal = intentMatch ? `Fits ${request.intent}` : null;
+    const signals = [sourceSignal, intentSignal ?? popularitySignal ?? freshness.signal, tasteSignal ?? popularitySignal ?? freshness.signal].filter((signal): signal is string => Boolean(signal)).slice(0, 3);
+    const reason = `${freshnessReason(source, freshness.signal)}.${intentSignal ? ` ${intentSignal}.` : ""}${tasteSignal ? ` ${tasteSignal}.` : ""}`;
     return [{ candidate, match, reason, signals, durationMinutes }];
   }).sort((left, right) => right.match - left.match);
 
@@ -489,7 +560,7 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
       chainId,
       page,
       hasMore,
-      request: request as Prisma.InputJsonValue,
+      request: { ...request, algorithmVersion: recommendationAlgorithmVersion } as Prisma.InputJsonValue,
       totalMinutes,
       items: {
         create: selected.map((item, position) => ({
@@ -524,6 +595,7 @@ export async function getLatestLiveSession(userId: string) {
     include: { items: { orderBy: { position: "asc" }, include: { video: { include: { channel: true } } } } }
   });
   if (!latest) return null;
+  if (storedAlgorithmVersion(latest.request) !== recommendationAlgorithmVersion) return null;
   const seen = await db.recommendationItem.findMany({
     where: { session: { userId, chainId: latest.chainId } },
     select: { videoId: true }
@@ -534,7 +606,7 @@ export async function getLatestLiveSession(userId: string) {
 export async function buildNextLiveSession(userId: string, sessionId: string) {
   const previous = await db.recommendationSession.findFirst({ where: { id: sessionId, userId } });
   const request = previous ? normalizeStoredRequest(previous.request) : null;
-  if (!previous || !request) {
+  if (!previous || !request || storedAlgorithmVersion(previous.request) !== recommendationAlgorithmVersion) {
     const error = new Error("Recommendation session was not found.") as Error & { code: string };
     error.code = "session_not_found";
     throw error;

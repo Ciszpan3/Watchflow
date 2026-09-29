@@ -41,6 +41,19 @@ function textFor(item: youtube_v3.Schema$Video) {
   return [item.snippet?.title, item.snippet?.description, ...(item.snippet?.tags ?? [])].join(" ").toLowerCase();
 }
 
+export function classifyLanguage(title: string, declaredLanguage?: string | null) {
+  const declared = declaredLanguage?.slice(0, 2).toLowerCase();
+  if (declared) return declared;
+  const normalized = title.toLowerCase();
+  if (/[ąćęłńóśźż]/i.test(title)) return "pl";
+  if (/\b(tôi|chơi|thử|bản|kinh|dị|quên|của|không|một)\b/iu.test(normalized) || /[ăđơư]/iu.test(title)) return "vi";
+  if (/\b(der|die|das|ist|wenn|für|nicht|eine|einen|stimmt|völlig)\b/iu.test(normalized) || /[äöüß]/iu.test(title)) return "de";
+  if (/\b(el|los|las|una|para|como|juego|jugando|español)\b/iu.test(normalized) || /[¿¡]/u.test(title)) return "es";
+  if (/\b(um|uma|não|você|jogo|jogando|português)\b/iu.test(normalized) || /[ãõ]/iu.test(title)) return "pt";
+  if (/\p{Script=Cyrillic}/u.test(title)) return "ru";
+  return "en";
+}
+
 export function classifyVideo(item: youtube_v3.Schema$Video) {
   const text = textFor(item);
   const durationSeconds = parseIsoDurationToSeconds(item.contentDetails?.duration ?? "PT0S");
@@ -63,9 +76,10 @@ export function classifyVideo(item: youtube_v3.Schema$Video) {
   if (format === "podcast" || format === "live") intents.add("company");
   if (/idea|design|creative|story|inspir/.test(text)) intents.add("inspire");
   if (!intents.size || /funny|game|entertain|challenge|music/.test(text)) intents.add("entertain");
-  const language = item.snippet?.defaultAudioLanguage?.slice(0, 2)
-    ?? item.snippet?.defaultLanguage?.slice(0, 2)
-    ?? (/[ąćęłńóśźż]/i.test(item.snippet?.title ?? "") ? "pl" : "en");
+  const language = classifyLanguage(
+    item.snippet?.title ?? "",
+    item.snippet?.defaultAudioLanguage ?? item.snippet?.defaultLanguage
+  );
   const clickbaitScore = [/[!?]{2,}/, /\b(shocking|unbelievable|you won't believe|musisz to zobaczyć)\b/i, /[A-Z]{8,}/]
     .reduce((score, pattern) => score + (pattern.test(item.snippet?.title ?? "") ? 34 : 0), 0);
   const audioFriendly = format === "podcast" || /podcast|interview|conversation|audio|listen|rozmowa|wywiad/i.test(text);
@@ -75,7 +89,7 @@ export function classifyVideo(item: youtube_v3.Schema$Video) {
     format,
     topics: topics.length ? topics : ["culture"],
     intents: [...intents],
-    language: language === "pl" ? "pl" : "en",
+    language,
     clickbaitScore: Math.min(100, clickbaitScore),
     audioFriendly
   };

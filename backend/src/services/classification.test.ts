@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { classifyTopicsFromText, classifyVideo, topicSearchTerms } from "./classification.js";
+import { classifyLanguage, classifyTopicsFromText, classifyVideo, topicSearchTerms } from "./classification.js";
 
 describe("YouTube video classification", () => {
+  it("keeps declared languages and detects obvious unsupported-language fallbacks", () => {
+    expect(classifyLanguage("A calm Minecraft build", "en-US")).toBe("en");
+    expect(classifyLanguage("Zniszczyłem pokojowe SMP w Minecraft")).toBe("pl");
+    expect(classifyLanguage("TÔI CHƠI THỬ BẢN MOD KINH DỊ CỦA MINECRAFT")).toBe("vi");
+    expect(classifyLanguage("Wenn DAS stimmt, ist der Erfolg völlig verrückt")).toBe("de");
+  });
+
   it("recognizes a short from duration and preserves Polish language", () => {
     const result = classifyVideo({
       snippet: { title: "Jak działa sztuczna inteligencja?", defaultAudioLanguage: "pl" },
