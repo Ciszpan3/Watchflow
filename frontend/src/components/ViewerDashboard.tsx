@@ -55,6 +55,7 @@ import {
   getViewerSignals,
   logout,
   migrateLocalProfile,
+  normalizeSessionTopics,
   recordOpened,
   removeFromQueue,
   requestLiveSync,
@@ -279,7 +280,7 @@ export function ViewerDashboard() {
     setResultCount(request.resultCount);
     setIntent(request.intent);
     setSource(request.source);
-    setTopics(request.topics);
+    setTopics(normalizeSessionTopics(request.topics));
     setFormats(request.formats);
     setLanguages(request.languages);
     setMaxAgeMonths(request.maxAgeMonths);
@@ -594,7 +595,7 @@ export function ViewerDashboard() {
             <div className="filters-summary"><div><span>Active filters</span><div>{activeFilterLabels.slice(0, 4).map((label) => <small key={label}>{label}</small>)}{activeFilterLabels.length > 4 && <small>+{activeFilterLabels.length - 4}</small>}</div></div><div><button type="button" onClick={resetToProfile}><RefreshCcw />Reset</button><button type="button" aria-expanded={moreFilters} onClick={() => setMoreFilters((value) => !value)}>More filters<ChevronDown className={moreFilters ? "rotated" : ""} /></button></div></div>
 
             {moreFilters && <div className="advanced-filters">
-              <fieldset><legend>Topic for this session</legend><div className="filter-chip-row">{interestOptions.map((option) => <button key={option.id} className={topics.includes(option.id) ? "selected" : ""} type="button" onClick={() => setTopics((current) => toggleValue(current, option.id))}>{topics.includes(option.id) && <Check />}{option.label}</button>)}</div><small className="filter-help">We check video metadata and channel context, not only the title.</small></fieldset>
+              <fieldset><legend>Topic for this session</legend><div className="filter-chip-row">{interestOptions.map((option) => <button key={option.id} className={topics.includes(option.id) ? "selected" : ""} type="button" onClick={() => setTopics((current) => current.includes(option.id) ? [] : [option.id])}>{topics.includes(option.id) && <Check />}{option.label}</button>)}</div><small className="filter-help">Choose one session topic. We check video metadata and channel context, not only the title.</small></fieldset>
               <div className="filter-columns"><fieldset><legend>Formats</legend><div className="filter-chip-row compact">{(Object.keys(formatLabels) as VideoFormat[]).map((format) => <button key={format} className={formats.includes(format) ? "selected" : ""} type="button" onClick={() => setFormats((current) => toggleValue(current, format))}>{formatLabels[format]}</button>)}</div></fieldset><fieldset><legend>Languages</legend><div className="filter-chip-row compact">{(Object.keys(languageLabels) as LanguageCode[]).map((language) => <button key={language} className={languages.includes(language) ? "selected" : ""} type="button" onClick={() => setLanguages((current) => toggleValue(current, language))}>{languageLabels[language]}</button>)}</div></fieldset></div>
               <fieldset><legend>Published within</legend><div className="filter-chip-row compact age-filter">{ageOptions.map((option) => <button key={option.label} className={maxAgeMonths === option.value ? "selected" : ""} type="button" onClick={() => setMaxAgeMonths(option.value)}>{option.label}</button>)}</div><small className="filter-help">This is a strict limit. Watchflow will not fill the set with older videos.</small></fieldset>
               <div className="filter-columns toggles"><label className="toggle-row"><span><Brain /><span><strong>Audio-friendly</strong><small>Works without watching closely</small></span></span><input type="checkbox" checked={audioFriendly} onChange={(event) => setAudioFriendly(event.target.checked)} /><i /></label><label className="toggle-row"><span><CheckCircle2 /><span><strong>Anti-clickbait filter</strong><small>Prefer accurate titles</small></span></span><input type="checkbox" checked={antiClickbait} onChange={(event) => setAntiClickbait(event.target.checked)} /><i /></label></div>

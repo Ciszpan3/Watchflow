@@ -15,6 +15,7 @@ import {
   getViewerSignals,
   getSessionDraft,
   migrateLocalProfile,
+  normalizeSessionTopics,
   saveToQueue,
   saveLatestRecommendationSession,
   saveSessionDraft,
@@ -82,6 +83,12 @@ describe("viewer profile adapter", () => {
     await expect(getLatestRecommendationSession("demo")).resolves.toMatchObject({ session: { sessionId: session.sessionId, request } });
     expect(window.localStorage.getItem(VIEWER_SESSION_DRAFT_KEY)).toBeTruthy();
     expect(window.localStorage.getItem(VIEWER_LAST_SESSION_KEY)).toBeTruthy();
+  });
+
+  it("migrates accumulated session topics to one explicit topic", async () => {
+    expect(normalizeSessionTopics(["gaming", "technology", "science"])).toEqual(["science"]);
+    window.localStorage.setItem(VIEWER_SESSION_DRAFT_KEY, JSON.stringify({ request: { ...request, topics: ["gaming", "technology"] } }));
+    await expect(getSessionDraft("demo")).resolves.toMatchObject({ request: { topics: ["technology"] } });
   });
 
   it("keeps demo signals local without inventing imported counts", async () => {

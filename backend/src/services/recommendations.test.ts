@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { buildDiscoveryLanes, creatorFamilyName, discoveryLaneCapacity, discoverySearchQuery, fitTier, freshnessForVideo, freshnessReason, gamingInterestKeys, historyAffinity, historyTermsForSearch, isLowTrustDiscoveryTitle, isPopularNewCreator, searchCacheKey, searchDurationForFormats, subscriptionCandidateExpiration, topicCategoryMismatch, youtubeSearchParameters } from "./recommendations.js";
+import { buildDiscoveryLanes, creatorFamilyName, discoveryLaneCapacity, discoveryPreferenceScore, discoverySearchQuery, fitTier, freshnessForVideo, freshnessReason, gamingInterestKeys, hasStrongTopicEvidence, historyAffinity, historyTermsForSearch, isLowTrustDiscoveryTitle, isPopularNewCreator, normalizeSessionTopics, searchCacheKey, searchDurationForFormats, subscriptionCandidateExpiration, topicCategoryMismatch, youtubeSearchParameters } from "./recommendations.js";
 
 const now = new Date("2026-09-20T12:00:00.000Z");
 
@@ -104,6 +104,8 @@ describe("recommendation freshness", () => {
     expect(topicCategoryMismatch({ categoryId: "22" }, ["gaming"])).toBe(true);
     expect(topicCategoryMismatch({ categoryId: "27" }, ["gaming"])).toBe(true);
     expect(topicCategoryMismatch({ categoryId: "20" }, ["finance"])).toBe(true);
+    expect(topicCategoryMismatch({ categoryId: "20" }, ["technology", "gaming"])).toBe(false);
+    expect(topicCategoryMismatch({ categoryId: "28" }, ["technology", "gaming"])).toBe(false);
   });
 
   it("does not claim history affinity from a generic topic alone", () => {
@@ -119,6 +121,21 @@ describe("recommendation freshness", () => {
     ], ["minecraft"])).toMatchObject({ matched: true, anchor: "minecraft" });
   });
 
+  it("rejects accidental tech and space words without semantic evidence", () => {
+    const video = (title: string, categoryId: string, channel = "Example") => ({
+      title,
+      categoryId,
+      description: null,
+      tags: [],
+      channel: { title: channel, description: null }
+    });
+    expect(hasStrongTopicEvidence(video("Georgia Tech football highlights", "17", "ESPN"), "technology")).toBe(false);
+    expect(hasStrongTopicEvidence(video("World Wide Technology Raceway", "17", "NASCAR"), "technology")).toBe(false);
+    expect(hasStrongTopicEvidence(video("AI researcher explains model risk", "25", "News"), "technology")).toBe(true);
+    expect(hasStrongTopicEvidence(video("Lesbian Space Princess review", "23"), "science")).toBe(false);
+    expect(hasStrongTopicEvidence(video("NASA's new telescope might break physics", "28"), "science")).toBe(true);
+  });
+
   it("builds creator-led discovery lanes from history and subscriptions", () => {
     const history = [
       ...Array.from({ length: 7 }, (_, index) => ({ title: `Variety challenge ${index}`, channelTitle: "Variety Crew", topics: ["gaming"], origin: "history" as const })),
@@ -132,34 +149,53 @@ describe("recommendation freshness", () => {
       topics: ["gaming"],
       origin: "subscription" as const
     }));
-    const lanes = buildDiscoveryLanes([...history, ...subscriptions], ["gaming"], new Set(["arenaguide"]));
+    const lanes = buildDiscoveryLanes([...history, ...subscriptions], ["gaming"], "relax", new Set(["arenaguide"]));
     expect(lanes).toHaveLength(5);
-    expect(lanes.map((lane) => lane.label)).toEqual(expect.arrayContaining(["Variety Crew", "Block Builder", "Tactical Player", "Tower Expert", "Arena Guide"]));
+    expect(lanes.map((lane) => lane.label)).toEqual(expect.arrayContaining(["Variety Crew", "Block Builder", "Arena Guide", "variety gaming", "broader gaming"]));
     expect(new Set(lanes.map((lane) => lane.key)).size).toBe(5);
     expect(lanes.find((lane) => lane.label === "Arena Guide")?.source).toBe("subscription");
-    expect(lanes.find((lane) => lane.label === "Arena Guide")?.interestKeys).toContain("brawl-stars");
+    expect(lanes.find((lane) => lane.label === "Arena Guide")?.preferredInterestKeys).toEqual([]);
   });
 
-  it("uses metadata to build multi-game profiles for subscribed creators", () => {
+  it("requires watched or liked evidence before a game becomes a preference", () => {
     const signals = [
       ...Array.from({ length: 4 }, (_, index) => ({
         title: `Ranked match ${index}`,
         channelTitle: "Mobile Tactics",
         topics: ["gaming"],
-        origin: "subscription" as const,
+        origin: "history" as const,
         metadataText: "#clashroyale"
       })),
-      ...Array.from({ length: 4 }, (_, index) => ({
-        title: `Ranked challenge ${index}`,
+      {
+        title: "A Brawl Stars match I liked",
+        channelTitle: "Mobile Tactics",
+        topics: ["gaming"],
+        origin: "liked" as const,
+        metadataText: "#brawlstars"
+      },
+      ...Array.from({ length: 8 }, (_, index) => ({
+        title: `Unwatched Brawl upload ${index}`,
         channelTitle: "Mobile Tactics",
         topics: ["gaming"],
         origin: "subscription" as const,
         metadataText: "#brawlstars"
       }))
     ];
-    const lane = buildDiscoveryLanes(signals, ["gaming"], new Set(["mobiletactics"]))[0];
-    expect(lane?.interestKeys).toEqual(expect.arrayContaining(["clash-royale", "brawl-stars"]));
+    const lane = buildDiscoveryLanes(signals, ["gaming"], "relax", new Set(["mobiletactics"]))[0];
+    expect(lane?.preferredInterestKeys).toEqual(expect.arrayContaining(["clash-royale", "brawl-stars"]));
     expect(lane?.query).toContain("clash royale|brawl stars");
+  });
+
+  it("uses recognized games as ranking boosts instead of required filters", () => {
+    const preferred = discoveryPreferenceScore("history", ["minecraft"], [], "A Minecraft challenge");
+    const otherGame = discoveryPreferenceScore("history", ["minecraft"], [], "A new co-op horror game");
+    expect(preferred).toBeGreaterThan(otherGame);
+    expect(otherGame).toBeGreaterThan(0);
+  });
+
+  it("normalizes accumulated legacy topics to the last explicit selection", () => {
+    expect(normalizeSessionTopics(["gaming", "technology", "science"])).toEqual(["science"]);
+    expect(normalizeSessionTopics([])).toEqual([]);
   });
 
   it("recognizes alternate channels from the same creator family", () => {

@@ -80,6 +80,11 @@ function normalizeProfile(value: unknown): ViewerProfile | null {
   };
 }
 
+export function normalizeSessionTopics(topics: string[] | undefined) {
+  const selected = topics?.at(-1)?.trim();
+  return selected ? [selected] : [];
+}
+
 function normalizeRequest(request: Partial<RecommendationSessionRequest> | undefined): RecommendationSessionRequest | null {
   if (!request) return null;
   return {
@@ -87,6 +92,7 @@ function normalizeRequest(request: Partial<RecommendationSessionRequest> | undef
     timeLimitEnabled: request.timeLimitEnabled ?? true,
     recommendationMode: request.recommendationMode ?? "session",
     resultCount: (request.resultCount ?? (request.recommendationMode === "single" ? 5 : 3)) as ResultCount,
+    topics: normalizeSessionTopics(request.topics),
     maxAgeMonths: request.maxAgeMonths === undefined ? 12 : request.maxAgeMonths
   } as RecommendationSessionRequest;
 }
