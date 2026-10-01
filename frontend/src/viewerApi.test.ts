@@ -11,6 +11,7 @@ import {
   getLiveViewerSignals,
   getLatestRecommendationSession,
   getQueue,
+  getViewerFeedback,
   getViewerProfile,
   getViewerSignals,
   getSessionDraft,
@@ -20,9 +21,11 @@ import {
   saveLatestRecommendationSession,
   saveSessionDraft,
   saveViewerProfile,
-  sendFeedback
+  sendFeedback,
+  removeFeedback,
+  clearViewerFeedback
 } from "./viewerApi";
-import { createDemoSession } from "./viewerData";
+import { createDemoSession, recommendations } from "./viewerData";
 import type { RecommendationSessionRequest } from "./viewerTypes";
 
 const request: RecommendationSessionRequest = {
@@ -130,19 +133,42 @@ describe("viewer profile adapter", () => {
   });
 
   it("sends persistent queue and feedback actions to their live endpoints", async () => {
+    const video = { ...recommendations[0], fit: "strong" as const, reason: "Fits.", recommendationSignals: ["Subscribed"] };
+    const feedback = {
+      videoId: video.id,
+      reason: "not_for_me" as const,
+      targetTopics: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      preferenceExpiresAt: null,
+      video: { title: video.title, channel: video.channel, image: video.image, duration: video.duration }
+    };
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ items: [] }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ videoId: "abc", saved: true }), { status: 201 }))
-      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+      .mockResolvedValueOnce(new Response(JSON.stringify({ feedback }), { status: 201 }));
     vi.stubGlobal("fetch", fetchMock);
     await getQueue();
     await saveToQueue("abc");
-    await sendFeedback("abc", "not_interested");
+    await sendFeedback(video, "not_for_me", undefined, "live");
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       "http://localhost:4000/api/queue?sort=saved_newest",
       "http://localhost:4000/api/queue",
-      "http://localhost:4000/api/recommendations/abc/feedback"
+      `http://localhost:4000/api/recommendations/${video.id}/feedback`
     ]);
+  });
+
+  it("persists, removes and clears reversible demo feedback", async () => {
+    const video = { ...recommendations[0], fit: "strong" as const, reason: "Fits.", recommendationSignals: ["Subscribed"] };
+    await sendFeedback(video, "less_topic", "science", "demo");
+    await expect(getViewerFeedback("demo")).resolves.toMatchObject({
+      items: [{ videoId: video.id, reason: "less_topic", targetTopics: ["science"] }]
+    });
+    await removeFeedback(video.id, "demo");
+    await expect(getViewerFeedback("demo")).resolves.toEqual({ items: [] });
+    await sendFeedback(video, "too_often", undefined, "demo");
+    await clearViewerFeedback("demo");
+    await expect(getViewerFeedback("demo")).resolves.toEqual({ items: [] });
   });
 
   it("preserves backend error codes for reconnect and cooldown UI", async () => {

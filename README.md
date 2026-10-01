@@ -9,7 +9,7 @@ Projekt jest pełnostackową aplikacją portfolio: łączy bezpieczne Google OAu
 - logowanie Google i trwała sesja w cookie `HttpOnly`;
 - szyfrowanie refresh tokenów AES-256-GCM wyłącznie na backendzie;
 - trwały profil zainteresowań i onboarding w PostgreSQL;
-- synchronizacja subskrypcji, maksymalnie 200 polubień oraz do 50 ostatnich filmów z maksymalnie 60 kanałów na przebieg; kanały z nowymi publikacjami są sprawdzane jako pierwsze, a pozostałe rotują;
+- synchronizacja subskrypcji, maksymalnie 200 polubień oraz do 50 ostatnich filmów z maksymalnie 60 kanałów na przebieg; około połowa ograniczonej puli kanałów jest rezerwowana dla często oglądanych subskrypcji, a reszta uwzględnia nowe publikacje, polubienia i rotację;
 - wyszukiwanie nowych twórców przez profile oparte na oglądanych kanałach, polubieniach i subskrypcjach, uzupełnione szerokimi torami odkrywania dla wybranego tematu;
 - jeden jawny temat bieżącej sesji; starsze szkice z wieloma tematami są automatycznie normalizowane do ostatniego wyboru;
 - rozpoznawanie konkretnych gier z historii i polubień jako miękka preferencja, a nie obowiązkowy filtr; szerokie `Gaming` obejmuje różne gry, gatunki i kanały;
@@ -26,6 +26,9 @@ Projekt jest pełnostackową aplikacją portfolio: łączy bezpieczne Google OAu
 - trwały szkic filtrów i ostatni zestaw, synchronizowane przez PostgreSQL po zalogowaniu oraz `localStorage` w demo;
 - profil smaku przechowywany w PostgreSQL jako źródło prawdy dla zalogowanego użytkownika;
 - dobrowolny import maksymalnie 5000 ostatnich wpisów historii z pliku Google Takeout; historia jest parsowana lokalnie i może być wyłączona w profilu;
+- osobisty priorytet twórców oparty na liczbie unikalnych obejrzanych filmów, częstotliwości, świeżości, subskrypcjach, polubieniach oraz aktywności w Watchflow; około połowa miejsc z puli subskrypcji jest rezerwowana dla często oglądanych, pasujących kanałów;
+- kontrolowane rozpoznawanie kanałów gamingowych oznaczonych przez YouTube jako `Entertainment`, oparte na całym korpusie ich materiałów i historii użytkownika, bez sztywnej listy dozwolonych gier;
+- pięć precyzyjnych powodów odrzucenia rekomendacji, cofanie decyzji i ekran zarządzania feedbackiem; wpływ na temat, długość lub kanał wygasa stopniowo przez 30 dni;
 - bezpiecznie cache'owany avatar Google i kontrolowane zastępniki brakujących obrazów;
 - trwała kolejka z usuwaniem i sortowaniem po dacie zapisania, publikacji lub długości;
 - poziomy `Excellent`, `Strong`, `Good` i `Exploratory` zamiast pozornie precyzyjnego procentu dopasowania;

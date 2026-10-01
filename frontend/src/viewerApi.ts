@@ -10,6 +10,8 @@ import type {
   ScoredRecommendation,
   ViewerProfile,
   ViewerSignalsSummary,
+  ViewerFeedbackItem,
+  ViewerFeedbackReason,
   WatchHistoryImportItem,
   WatchHistorySummary
 } from "./viewerTypes";
@@ -20,6 +22,7 @@ export const VIEWER_PROFILE_MIGRATED_KEY = "watchflow:viewer-profile-migrated:v1
 export const VIEWER_SESSION_DRAFT_KEY = "watchflow:session-draft:v1";
 export const VIEWER_LAST_SESSION_KEY = "watchflow:last-session:v1";
 export const VIEWER_HISTORY_KEY = "watchflow:watch-history:v1";
+export const VIEWER_FEEDBACK_KEY = "watchflow:feedback:v1";
 
 export const defaultViewerProfile: ViewerProfile = {
   version: 2,
@@ -217,7 +220,8 @@ export async function createRecommendationSession(
     return apiRequest<RecommendationSessionResponse>("/api/recommendations/session", { method: "POST", body: JSON.stringify(request) });
   }
   await new Promise((resolve) => window.setTimeout(resolve, 450));
-  return createDemoSession(request, profile, undefined, [], 1, undefined, historyItems);
+  const feedback = (await getViewerFeedback("demo")).items;
+  return createDemoSession(request, profile, undefined, [], 1, undefined, historyItems, feedback);
 }
 
 export async function getSessionDraft(mode: "demo" | "live") {
@@ -276,7 +280,8 @@ export async function createNextRecommendationSession(session: RecommendationSes
     return apiRequest<RecommendationSessionResponse>(`/api/recommendations/session/${encodeURIComponent(session.sessionId)}/next`, { method: "POST" });
   }
   await new Promise((resolve) => window.setTimeout(resolve, 350));
-  return createDemoSession(session.request, profile, undefined, session.seenVideoIds, session.page + 1, session.chainId, historyItems);
+  const feedback = (await getViewerFeedback("demo")).items;
+  return createDemoSession(session.request, profile, undefined, session.seenVideoIds, session.page + 1, session.chainId, historyItems, feedback);
 }
 
 export async function getQueue(sort: QueueSort = "saved_newest") {
@@ -291,8 +296,51 @@ export async function removeFromQueue(videoId: string) {
   return apiRequest<void>(`/api/queue/${encodeURIComponent(videoId)}`, { method: "DELETE" });
 }
 
-export async function sendFeedback(videoId: string, reason: "already_watched" | "not_interested" | "too_long" | "too_often") {
-  return apiRequest<void>(`/api/recommendations/${encodeURIComponent(videoId)}/feedback`, { method: "POST", body: JSON.stringify({ reason }) });
+export async function getViewerFeedback(mode: "demo" | "live") {
+  if (mode === "live") return apiRequest<{ items: ViewerFeedbackItem[] }>("/api/viewer/feedback");
+  if (!storageAvailable()) return { items: [] };
+  try {
+    const items = JSON.parse(window.localStorage.getItem(VIEWER_FEEDBACK_KEY) ?? "[]") as ViewerFeedbackItem[];
+    return { items: Array.isArray(items) ? items : [] };
+  } catch {
+    return { items: [] };
+  }
+}
+
+export async function sendFeedback(video: ScoredRecommendation, reason: ViewerFeedbackReason, topic: string | undefined, mode: "demo" | "live") {
+  if (mode === "live") {
+    return apiRequest<{ feedback: ViewerFeedbackItem }>(`/api/recommendations/${encodeURIComponent(video.id)}/feedback`, {
+      method: "POST",
+      body: JSON.stringify({ reason, topic })
+    });
+  }
+  const now = new Date();
+  const expires = ["less_topic", "too_long", "too_often"].includes(reason)
+    ? new Date(now.getTime() + 30 * 86_400_000).toISOString()
+    : null;
+  const feedback: ViewerFeedbackItem = {
+    videoId: video.id,
+    reason,
+    targetTopics: reason === "less_topic" && topic ? [topic] : [],
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+    preferenceExpiresAt: expires,
+    video: { title: video.title, channel: video.channel, image: video.image, duration: video.duration }
+  };
+  const current = (await getViewerFeedback("demo")).items.filter((item) => item.videoId !== video.id);
+  if (storageAvailable()) window.localStorage.setItem(VIEWER_FEEDBACK_KEY, JSON.stringify([feedback, ...current]));
+  return { feedback };
+}
+
+export async function removeFeedback(videoId: string, mode: "demo" | "live") {
+  if (mode === "live") return apiRequest<void>(`/api/recommendations/${encodeURIComponent(videoId)}/feedback`, { method: "DELETE" });
+  const current = (await getViewerFeedback("demo")).items.filter((item) => item.videoId !== videoId);
+  if (storageAvailable()) window.localStorage.setItem(VIEWER_FEEDBACK_KEY, JSON.stringify(current));
+}
+
+export async function clearViewerFeedback(mode: "demo" | "live") {
+  if (mode === "live") return apiRequest<void>("/api/viewer/feedback", { method: "DELETE" });
+  if (storageAvailable()) window.localStorage.removeItem(VIEWER_FEEDBACK_KEY);
 }
 
 export async function recordOpened(videoId: string) {

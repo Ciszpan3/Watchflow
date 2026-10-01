@@ -4,6 +4,7 @@ import { db } from "../db.js";
 import { type AuthenticatedRequest, optionalAuth, requireAuth } from "../middleware/auth.js";
 import { deleteSession } from "../services/sessions.js";
 import { requestViewerSync } from "../services/viewerSync.js";
+import { serializeFeedback } from "../services/feedback.js";
 import { isProfileInput, isRecommendationRequest, isWatchHistoryImportItem, type WatchHistoryImportItem } from "../viewer/contracts.js";
 import { getOrCreateProfile, profileCreateData, serializeProfile } from "../viewer/profile.js";
 import { classifyTopicsFromText } from "../services/classification.js";
@@ -98,6 +99,28 @@ viewerRouter.post("/history/import", async (req, res, next) => {
 viewerRouter.delete("/history", async (req, res, next) => {
   try {
     await db.watchHistoryItem.deleteMany({ where: { userId: (req as AuthenticatedRequest).authUser.id } });
+    res.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
+viewerRouter.get("/feedback", async (req, res, next) => {
+  try {
+    const rows = await db.recommendationFeedback.findMany({
+      where: { userId: (req as AuthenticatedRequest).authUser.id },
+      orderBy: { updatedAt: "desc" },
+      include: { video: { include: { channel: true } } }
+    });
+    res.json({ items: rows.map(serializeFeedback) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+viewerRouter.delete("/feedback", async (req, res, next) => {
+  try {
+    await db.recommendationFeedback.deleteMany({ where: { userId: (req as AuthenticatedRequest).authUser.id } });
     res.status(204).end();
   } catch (error) {
     next(error);

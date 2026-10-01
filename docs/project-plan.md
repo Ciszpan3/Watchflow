@@ -20,7 +20,7 @@ Watchflow pomaga widzowi świadomie wybrać film pasujący do czasu, intencji i 
 
 ## Sygnały i synchronizacja
 
-Synchronizacja pobiera wszystkie dostępne subskrypcje, maksymalnie 200 ostatnich polubionych filmów oraz po maksymalnie 50 ostatnich materiałów z maksymalnie 60 kanałów w jednym przebiegu. Najpierw wybiera kanały, dla których YouTube zgłasza nowe publikacje, następnie kanały występujące w polubieniach, a pozostałe rotuje między synchronizacjami. Limity można zmienić przez `SUBSCRIPTION_CHANNEL_LIMIT` i `SUBSCRIPTION_VIDEOS_PER_CHANNEL`, przy czym API YouTube ogranicza pojedynczą stronę playlisty do 50 pozycji. Kandydaci z subskrypcji są przechowywani przez 30 dni, więc kolejne synchronizacje budują pulę materiałów zamiast usuwać ją po sześciu godzinach.
+Synchronizacja pobiera wszystkie dostępne subskrypcje, maksymalnie 200 ostatnich polubionych filmów oraz po maksymalnie 50 ostatnich materiałów z maksymalnie 60 kanałów w jednym przebiegu. Gdy użytkownik włączył zaimportowaną historię, około połowa ograniczonej puli kanałów jest rezerwowana dla jego najczęściej oglądanych subskrypcji. Pozostałe miejsca trafiają najpierw do kanałów, dla których YouTube zgłasza nowe publikacje, następnie do kanałów występujących w polubieniach, a reszta rotuje między synchronizacjami. Dzięki temu ranking nie traci ulubionego twórcy tylko dlatego, że jego materiały nie znalazły się w bieżącej rotacji. Limity można zmienić przez `SUBSCRIPTION_CHANNEL_LIMIT` i `SUBSCRIPTION_VIDEOS_PER_CHANNEL`, przy czym API YouTube ogranicza pojedynczą stronę playlisty do 50 pozycji. Kandydaci z subskrypcji są przechowywani przez 30 dni, więc kolejne synchronizacje budują pulę materiałów zamiast usuwać ją po sześciu godzinach.
 
 Import ma ograniczoną równoległość, limit czasu dla pojedynczych żądań YouTube oraz limit całego zadania. Przerwany proces nie może pozostawić użytkownika z trwałym stanem `RUNNING`: przy następnym uruchomieniu backend oznacza takie zadania jako nieudane i pozwala wykonać ponowną próbę.
 
@@ -28,7 +28,7 @@ Polubienia są sygnałem gustu, a nie osobnym źródłem kandydatów. Historia o
 
 Nowi twórcy są wyszukiwani przez maksymalnie trzy profile oparte na rzeczywistych sygnałach użytkownika oraz dwa szerokie tory odkrywania dla bieżącego tematu. Profile mogą pochodzić z najczęściej oglądanych kanałów, polubień lub subskrypcji, ale same metadane ostatnich filmów subskrybowanego kanału nie wystarczają do uznania konkretnej gry za zainteresowanie użytkownika. Przy temacie Gaming rozpoznane gry otrzymują dodatkowe punkty tylko wtedy, gdy powtarzają się w zaimportowanej historii albo polubieniach. Są miękką preferencją rankingu, nigdy wymaganiem wobec wszystkich kandydatów. Kanał źródłowy oraz jego warianty `More`, `Plus`, `Clips` i podobne nie są przedstawiane jako nowy twórca.
 
-Zapytania Gaming używają `videoCategoryId=20`, a ranking wymaga kategorii YouTube Gaming, żeby odsiać materiały, w których przypadkowo pojawiło się słowo „game”. Oprócz profili twórców aplikacja zawsze uruchamia szerokie wyszukiwanie popularnych materiałów typu variety/multiplayer oraz indie/gameplay. Wyniki z jednego profilu i kanału są limitowane, dlatego Minecraft, Clash Royale ani inna pojedyncza gra nie mogą zdominować zestawu, a pozostałe gatunki pozostają dostępne. Ogólne etykiety takie jak `gaming`, `video` czy `obejrzano` nie są sygnałem gustu. Każda sesja korzysta wyłącznie z kandydatów zwróconych dla jej aktualnych profili, a wersjonowany cache nie może przywrócić puli z poprzedniego algorytmu.
+Zapytania nowych twórców w Gaming używają `videoCategoryId=20`, żeby odsiać materiały, w których przypadkowo pojawiło się słowo „game”. Dla subskrypcji kategoria YouTube nie jest jednak jedyną bramką: często oglądany kanał oznaczony jako `Entertainment` może zostać rozpoznany jako gamingowy, jeżeli powtarzalne dowody występują w jego tytułach, opisach, tagach, linkach i zaimportowanej historii użytkownika. Wyjątek nie dotyczy nieznanych twórców i jest ograniczony do jednego filmu danego kanału w zestawie. Oprócz profili twórców aplikacja uruchamia szerokie wyszukiwanie popularnych materiałów typu variety/multiplayer oraz indie/gameplay. Wyniki z jednego profilu i kanału są limitowane, dlatego Minecraft, Clash Royale ani inna pojedyncza gra nie mogą zdominować zestawu, a pozostałe gatunki pozostają dostępne. Ogólne etykiety takie jak `gaming`, `video` czy `obejrzano` nie są sygnałem gustu. Każda sesja korzysta wyłącznie z kandydatów zwróconych dla jej aktualnych profili, a wersjonowany cache nie może przywrócić puli z poprzedniego algorytmu.
 
 Użytkownik wybiera jeden temat bieżącej sesji. Interfejs zastępuje poprzedni wybór zamiast kumulować wiele tematów, a backend normalizuje także starsze szkice i żądania. Dzięki temu wybranie `Technology` albo `Science` nie pozostawia ukrytego filtra `Gaming`. Dla tych dwóch szerokich tematów dodatkowa walidacja semantyczna sprawdza kategorię YouTube oraz kilka konkretnych sygnałów z tytułu, opisu, tagów i kontekstu kanału. Chroni to wyniki przed przypadkowymi trafieniami takimi jak sportowy kanał z nazwą uczelni zawierającą słowo „Tech” albo fabularny film ze słowem „space”.
 
@@ -50,6 +50,8 @@ Ranking korzysta z następujących sygnałów:
 
 Zaimportowana historia nie jest traktowana jako luźny tag przypięty do każdego filmu z tej samej kategorii. Po imporcie sygnał jest automatycznie włączany, a użytkownik może go później wyłączyć w profilu. Profile odkrywania liczą częstotliwość oglądania konkretnych kanałów, wzmacniają polubienia i subskrypcje, rozpoznają gry z metadanych oraz dbają o różnorodność między profilami. Sama szeroka kategoria, np. `Gaming`, nie wystarcza. Komunikat na karcie wskazuje konkretny kanał z historii, subskrypcji lub polubień, który był podstawą wyszukiwania. Historia nie zastępuje wybranego tematu sesji.
 
+Osobisty wynik twórcy korzysta z liczby unikalnych obejrzanych filmów, częstotliwości i świeżości oglądania oraz polubień, otwarć i zapisów. Wielokrotne odtworzenie tego samego filmu ma ograniczony wpływ. Nazwy kanałów są normalizowane i łączone w bezpieczne rodziny, np. kanał główny oraz wariant `Plus`. W puli subskrypcji około połowa miejsc jest najpierw proponowana często oglądanym twórcom, o ile ich materiały spełniają bieżące filtry. Nadal obowiązuje limit dwóch filmów jednego kanału.
+
 Wynik liczbowy służy wyłącznie do sortowania. Interfejs pokazuje `Excellent fit`, `Strong fit`, `Good fit` albo `Exploratory pick` oraz maksymalnie trzy rzeczywiste sygnały. Nie są używane suwaki głębokości, tempa ani znajomości, których nie da się wiarygodnie wyprowadzić z metadanych YouTube.
 
 Język i format są filtrami wymaganymi. Wykluczone tematy oraz obejrzane filmy są usuwane. Powtarzające się kanały i tematy otrzymują karę różnorodności. Przy wyłączonym limicie długość nie filtruje ani nie punktuje materiałów. Oba tryby respektują wybraną liczbę wyników: 3, 5 albo 10. Tryb sesji układa filmy w ramach wspólnego limitu, a tryb pojedynczego filmu preferuje długość w zakresie ±20% wskazanego czasu, co najmniej ±5 minut.
@@ -58,7 +60,7 @@ Wybrany limit wieku jest ścisłym filtrem dla obu źródeł. Aplikacja nie uzup
 
 W trybie mieszanym sesja preferuje układ subskrypcja, nowy twórca, subskrypcja, a pięć alternatyw kontynuuje ten wzorzec. Tryby wyłączne nie rozszerzają samodzielnie źródła. `Next set` zachowuje wspólny łańcuch i wyklucza wszystkie materiały pokazane na wcześniejszych stronach.
 
-Feedback zmienia kolejne wyniki: obejrzany materiał jest wykluczany, brak zainteresowania obniża tematy, „zbyt długi” czasowo obniża podobne długości, „zbyt częsty” obniża kanał, a zapisanie lub otwarcie wzmacnia temat i kanał.
+Feedback zawsze ukrywa konkretny odrzucony film do czasu cofnięcia decyzji. `Already watched` i `Not for me` nie wpływają szerzej. `Show less about this topic`, `Too long right now` oraz `Show this channel less` obniżają odpowiednio wybrany temat, długości zbliżone do odrzuconego filmu albo konkretny kanał. Siła tych trzech preferencji maleje liniowo i osiąga zero po 30 dniach. Użytkownik może od razu użyć `Undo`, usunąć pojedynczą decyzję lub wyczyścić cały feedback w `Taste Profile`. Zapisanie lub otwarcie filmu nadal wzmacnia jego temat i kanał.
 
 ## Endpointy
 
@@ -69,7 +71,8 @@ Feedback zmienia kolejne wyniki: obejrzany materiał jest wykluczany, brak zaint
 - `POST /api/viewer/sync`;
 - `POST /api/recommendations/session`, `GET /api/recommendations/session/latest`;
 - `POST /api/recommendations/session/:sessionId/next`;
-- `POST /api/recommendations/:videoId/feedback` i `POST /api/recommendations/:videoId/opened`;
+- `POST /api/recommendations/:videoId/feedback`, `DELETE /api/recommendations/:videoId/feedback` i `POST /api/recommendations/:videoId/opened`;
+- `GET /api/viewer/feedback`, `DELETE /api/viewer/feedback`;
 - `GET /api/queue?sort=...`, `POST /api/queue`, `DELETE /api/queue/:videoId`.
 - `GET /api/viewer/history`, `POST /api/viewer/history/import`, `DELETE /api/viewer/history`.
 

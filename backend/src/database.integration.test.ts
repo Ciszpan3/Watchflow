@@ -54,6 +54,18 @@ databaseTest("PostgreSQL repositories", () => {
     await expect(db.recommendationSession.findFirst({ where: { id: recommendationSession.id, userId: "another-user" } })).resolves.toBeNull();
     await db.savedVideo.create({ data: { userId, videoId } });
     await expect(db.savedVideo.create({ data: { userId, videoId } })).rejects.toMatchObject({ code: "P2002" });
+    await db.recommendationFeedback.create({
+      data: { userId, videoId, reason: "NOT_INTERESTED", targetTopics: ["technology"] }
+    });
+    await expect(db.recommendationFeedback.create({
+      data: { userId, videoId, reason: "NOT_FOR_ME" }
+    })).rejects.toMatchObject({ code: "P2002" });
+    await expect(db.recommendationFeedback.findFirst({
+      where: { userId: "another-user", videoId }
+    })).resolves.toBeNull();
+    await expect(db.recommendationFeedback.findUniqueOrThrow({
+      where: { userId_videoId: { userId, videoId } }
+    })).resolves.toMatchObject({ reason: "NOT_INTERESTED", targetTopics: ["technology"] });
     await db.syncJob.create({ data: { userId, activeKey: userId } });
     await expect(db.syncJob.create({ data: { userId, activeKey: userId } })).rejects.toMatchObject({ code: "P2002" });
   });

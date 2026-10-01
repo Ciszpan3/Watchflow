@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "../db.js";
-import { FeedbackReason } from "../generated/prisma/enums.js";
 import { getAuthUser, optionalAuth, requireAuth } from "../middleware/auth.js";
+import { feedbackReasonFromApi, serializeFeedback } from "../services/feedback.js";
 import { buildLiveSession, buildNextLiveSession, getLatestLiveSession } from "../services/recommendations.js";
 import { isInvalidGrant } from "../services/youtubeLive.js";
 import { isRecommendationRequest } from "../viewer/contracts.js";
@@ -46,26 +46,40 @@ recommendationsRouter.post("/session/:sessionId/next", async (req, res, next) =>
   }
 });
 
-const reasonMap: Record<string, FeedbackReason> = {
-  already_watched: FeedbackReason.ALREADY_WATCHED,
-  not_interested: FeedbackReason.NOT_INTERESTED,
-  too_long: FeedbackReason.TOO_LONG,
-  too_often: FeedbackReason.TOO_OFTEN
-};
-
 recommendationsRouter.post("/:videoId/feedback", async (req, res, next) => {
   try {
-    const reason = reasonMap[String(req.body?.reason ?? "")];
+    const reason = feedbackReasonFromApi[String(req.body?.reason ?? "") as keyof typeof feedbackReasonFromApi];
     if (!reason) {
       res.status(422).json({ error: "invalid_feedback", message: "Choose a supported feedback reason." });
       return;
     }
     const userId = getAuthUser(req).id;
     const videoId = req.params.videoId;
-    await db.recommendationFeedback.upsert({
+    const video = await db.video.findUnique({ where: { id: videoId }, include: { channel: true } });
+    if (!video) {
+      res.status(404).json({ error: "video_not_found", message: "This recommendation is no longer available." });
+      return;
+    }
+    const requestedTopic = typeof req.body?.topic === "string" ? req.body.topic.trim().slice(0, 50) : "";
+    const targetTopics = reason === "NOT_INTERESTED"
+      ? requestedTopic && video.topics.includes(requestedTopic) ? [requestedTopic] : video.topics.slice(0, 1)
+      : [];
+    const feedback = await db.recommendationFeedback.upsert({
       where: { userId_videoId: { userId, videoId } },
-      update: { reason },
-      create: { userId, videoId, reason }
+      update: { reason, targetTopics },
+      create: { userId, videoId, reason, targetTopics },
+      include: { video: { include: { channel: true } } }
+    });
+    res.status(201).json({ feedback: serializeFeedback(feedback) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+recommendationsRouter.delete("/:videoId/feedback", async (req, res, next) => {
+  try {
+    await db.recommendationFeedback.deleteMany({
+      where: { userId: getAuthUser(req).id, videoId: req.params.videoId }
     });
     res.status(204).end();
   } catch (error) {

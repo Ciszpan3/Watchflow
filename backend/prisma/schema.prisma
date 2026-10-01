@@ -28,6 +28,7 @@ enum SyncStatus {
 
 enum FeedbackReason {
   ALREADY_WATCHED
+  NOT_FOR_ME
   NOT_INTERESTED
   TOO_LONG
   TOO_OFTEN
@@ -266,14 +267,15 @@ model SavedVideo {
 }
 
 model RecommendationFeedback {
-  id        String         @id @default(cuid())
-  userId    String
-  videoId   String
-  reason    FeedbackReason
-  createdAt DateTime       @default(now())
-  updatedAt DateTime       @updatedAt
-  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  video     Video          @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  id           String         @id @default(cuid())
+  userId       String
+  videoId      String
+  reason       FeedbackReason
+  targetTopics String[]       @default([])
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  video        Video          @relation(fields: [videoId], references: [id], onDelete: Cascade)
 
   @@unique([userId, videoId])
   @@index([userId, reason])

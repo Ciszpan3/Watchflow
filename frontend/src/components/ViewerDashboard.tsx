@@ -52,12 +52,14 @@ import {
   getSessionDraft,
   getWatchHistory,
   getViewerProfile,
+  getViewerFeedback,
   getViewerSignals,
   logout,
   migrateLocalProfile,
   normalizeSessionTopics,
   recordOpened,
   removeFromQueue,
+  removeFeedback,
   requestLiveSync,
   saveLiveViewerProfile,
   saveLatestRecommendationSession,
@@ -66,7 +68,8 @@ import {
   sendFeedback,
   saveViewerProfile,
   importWatchHistory,
-  clearWatchHistory
+  clearWatchHistory,
+  clearViewerFeedback
 } from "../viewerApi";
 import type {
   AuthSession,
@@ -81,6 +84,8 @@ import type {
   SourceMode,
   VideoFormat,
   ViewerProfile,
+  ViewerFeedbackItem,
+  ViewerFeedbackReason,
   ViewerSignalsSummary,
   WatchHistoryImportItem,
   WatchIntent
@@ -125,11 +130,19 @@ const queueSortOptions: Array<{ value: QueueSort; label: string }> = [
 ];
 const feedbackReasons = [
   { id: "already_watched" as const, label: "I already watched it" },
-  { id: "not_interested" as const, label: "Not interested in this topic" },
+  { id: "not_for_me" as const, label: "This video is not for me" },
+  { id: "less_topic" as const, label: "Show less about this topic" },
   { id: "too_long" as const, label: "Too long right now" },
-  { id: "too_often" as const, label: "I see this channel too often" }
+  { id: "too_often" as const, label: "Show this channel less" }
 ];
-type Toast = { message: string; tone?: "success" | "info" };
+const feedbackLabels: Record<ViewerFeedbackReason, string> = {
+  already_watched: "Already watched",
+  not_for_me: "Not for me",
+  less_topic: "Show less about topic",
+  too_long: "Too long",
+  too_often: "Show channel less"
+};
+type Toast = { message: string; tone?: "success" | "info"; action?: { label: string; onClick: () => void } };
 
 const initialRequest: RecommendationSessionRequest = {
   minutes: 45,
@@ -260,7 +273,12 @@ export function ViewerDashboard() {
   const [queueSort, setQueueSort] = React.useState<QueueSort>("saved_newest");
   const [removingVideoId, setRemovingVideoId] = React.useState<string | null>(null);
   const [feedbackVideo, setFeedbackVideo] = React.useState<ScoredRecommendation | null>(null);
+  const [feedbackTopic, setFeedbackTopic] = React.useState("");
+  const [feedbackItems, setFeedbackItems] = React.useState<ViewerFeedbackItem[]>([]);
+  const [feedbackManagerOpen, setFeedbackManagerOpen] = React.useState(false);
+  const [feedbackBusyId, setFeedbackBusyId] = React.useState<string | null>(null);
   const [toast, setToast] = React.useState<Toast | null>(null);
+  const feedbackDialogRef = React.useRef<HTMLDivElement>(null);
   const connected = Boolean(authSession?.authenticated && authSession.youtube.connected && mode === "live");
 
   const applyProfileDefaults = React.useCallback((nextProfile: ViewerProfile) => {
@@ -306,8 +324,8 @@ export function ViewerDashboard() {
         if (cancelled) return;
         setAuthSession(backendSession);
         if (backendSession.authenticated) {
-          const [profileResponse, liveSignals, queue, draft, latest, history] = await Promise.all([
-            getLiveViewerProfile(), getLiveViewerSignals(), getQueue(), getSessionDraft("live"), getLatestRecommendationSession("live"), getWatchHistory("live")
+          const [profileResponse, liveSignals, queue, draft, latest, history, feedback] = await Promise.all([
+            getLiveViewerProfile(), getLiveViewerSignals(), getQueue(), getSessionDraft("live"), getLatestRecommendationSession("live"), getWatchHistory("live"), getViewerFeedback("live")
           ]);
           const liveProfile = await migrateLocalProfile(localProfile, profileResponse.profile, profileResponse.source);
           if (cancelled) return;
@@ -317,6 +335,7 @@ export function ViewerDashboard() {
           setSignals(liveSignals);
           setLiveQueue(queue.items);
           setHistoryItems(history.items);
+          setFeedbackItems(feedback.items);
           setSaved(new Set(queue.items.map((item) => item.id)));
           if (latest.session) setSession(latest.session);
           else setSession({
@@ -332,9 +351,10 @@ export function ViewerDashboard() {
             if (syncResult.status === "queued" || syncResult.status === "already_running") setSyncing(true);
           }
         } else {
-          const [draft, latest, history] = await Promise.all([getSessionDraft("demo"), getLatestRecommendationSession("demo"), getWatchHistory("demo")]);
+          const [draft, latest, history, feedback] = await Promise.all([getSessionDraft("demo"), getLatestRecommendationSession("demo"), getWatchHistory("demo"), getViewerFeedback("demo")]);
           setProfile(localProfile);
           setHistoryItems(history.items);
+          setFeedbackItems(feedback.items);
           if (draft.request) applySessionRequest(draft.request); else applyProfileDefaults(localProfile);
           const demoSignals = await getViewerSignals(false, localProfile);
           setSignals({ ...demoSignals, watchHistory: { ...demoSignals.watchHistory, count: history.count, importedAt: history.importedAt, state: localProfile.useWatchHistory ? history.count ? "ready" : "available" : "disabled" } });
@@ -373,6 +393,32 @@ export function ViewerDashboard() {
     const timeout = window.setTimeout(() => setToast(null), 3500);
     return () => window.clearTimeout(timeout);
   }, [toast]);
+
+  React.useEffect(() => {
+    if (!feedbackVideo && !feedbackManagerOpen) return;
+    const dialog = feedbackDialogRef.current;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    dialog?.querySelector<HTMLElement>("button, select")?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setFeedbackVideo(null);
+        setFeedbackManagerOpen(false);
+        return;
+      }
+      if (event.key !== "Tab" || !dialog) return;
+      const focusable = [...dialog.querySelectorAll<HTMLElement>("button:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex='-1'])")];
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      previousFocus?.focus();
+    };
+  }, [feedbackManagerOpen, feedbackVideo]);
 
   React.useEffect(() => {
     if (!hydrated || mode !== "live") return;
@@ -498,10 +544,11 @@ export function ViewerDashboard() {
 
   function useDemoData() {
     void getViewerProfile().then(async (localProfile) => {
-      const [draft, latest, history] = await Promise.all([getSessionDraft("demo"), getLatestRecommendationSession("demo"), getWatchHistory("demo")]);
+      const [draft, latest, history, feedback] = await Promise.all([getSessionDraft("demo"), getLatestRecommendationSession("demo"), getWatchHistory("demo"), getViewerFeedback("demo")]);
       setMode("demo");
       setProfile(localProfile);
       setHistoryItems(history.items);
+      setFeedbackItems(feedback.items);
       if (draft.request) applySessionRequest(draft.request); else applyProfileDefaults(localProfile);
       const demoSignals = await getViewerSignals(false, localProfile);
       setSignals({ ...demoSignals, watchHistory: { ...demoSignals.watchHistory, count: history.count, importedAt: history.importedAt, state: localProfile.useWatchHistory ? history.count ? "ready" : "available" : "disabled" } });
@@ -525,14 +572,72 @@ export function ViewerDashboard() {
     setToast({ message: `Demo player: “${video.title}” would open on YouTube.`, tone: "info" });
   }
 
-  async function submitFeedback(video: ScoredRecommendation, reason: typeof feedbackReasons[number]) {
+  function openFeedback(video: ScoredRecommendation) {
+    const preferredTopic = session.request.topics.find((topic) => video.topics.includes(topic)) ?? video.topics[0] ?? "";
+    setFeedbackTopic(preferredTopic);
+    setFeedbackVideo(video);
+  }
+
+  async function undoFeedback(video: ScoredRecommendation, previousIndex: number) {
     try {
-      if (mode === "live") await sendFeedback(video.id, reason.id);
+      await removeFeedback(video.id, mode);
+      setFeedbackItems((current) => current.filter((item) => item.videoId !== video.id));
+      setSession((current) => {
+        if (current.items.some((item) => item.id === video.id)) return current;
+        const items = [...current.items];
+        items.splice(Math.min(previousIndex, items.length), 0, video);
+        return { ...current, items, totalMinutes: current.totalMinutes + video.duration };
+      });
+      setToast({ message: "Feedback removed and the video restored." });
+    } catch (error) {
+      setAppError(error instanceof Error ? error.message : "Feedback could not be undone.");
+    }
+  }
+
+  async function submitFeedback(video: ScoredRecommendation, reason: typeof feedbackReasons[number]) {
+    if (feedbackBusyId) return;
+    setFeedbackBusyId(video.id);
+    try {
+      const previousIndex = session.items.findIndex((item) => item.id === video.id);
+      const result = await sendFeedback(video, reason.id, reason.id === "less_topic" ? feedbackTopic : undefined, mode);
+      setFeedbackItems((current) => [result.feedback, ...current.filter((item) => item.videoId !== video.id)]);
       setSession((current) => ({ ...current, items: current.items.filter((item) => item.id !== video.id), totalMinutes: Math.max(0, current.totalMinutes - video.duration) }));
       setFeedbackVideo(null);
-      setToast({ message: `Got it: ${reason.label.toLowerCase()}.` });
+      setToast({ message: `Got it: ${reason.label.toLowerCase()}.`, action: { label: "Undo", onClick: () => void undoFeedback(video, Math.max(0, previousIndex)) } });
     } catch (error) {
       setAppError(error instanceof Error ? error.message : "Feedback could not be saved.");
+    } finally {
+      setFeedbackBusyId(null);
+    }
+  }
+
+  async function deleteFeedbackItem(videoId: string) {
+    if (feedbackBusyId) return;
+    setFeedbackBusyId(videoId);
+    try {
+      await removeFeedback(videoId, mode);
+      setFeedbackItems((current) => current.filter((item) => item.videoId !== videoId));
+      setToast({ message: "Feedback removed. This video can be recommended again." });
+    } catch (error) {
+      setAppError(error instanceof Error ? error.message : "Feedback could not be removed.");
+    } finally {
+      setFeedbackBusyId(null);
+    }
+  }
+
+  async function deleteAllFeedback() {
+    if (!window.confirm("Clear all recommendation feedback? Previously hidden videos may appear again.")) return;
+    if (feedbackBusyId) return;
+    setFeedbackBusyId("all");
+    try {
+      await clearViewerFeedback(mode);
+      setFeedbackItems([]);
+      setFeedbackManagerOpen(false);
+      setToast({ message: "All recommendation feedback cleared." });
+    } catch (error) {
+      setAppError(error instanceof Error ? error.message : "Feedback could not be cleared.");
+    } finally {
+      setFeedbackBusyId(null);
     }
   }
 
@@ -606,21 +711,22 @@ export function ViewerDashboard() {
 
         <section className="session-section" id="discover">
           <div className="section-header"><div><span className="section-kicker">Made for this moment · Set {session.page}</span><h2>{session.items.length ? session.recommendationMode === "single" ? `${session.items.length} video alternatives` : `Your ${session.totalMinutes}-minute session` : session.page > 1 ? "No more matches" : session.emptyReason === "no_fresh_matches" ? "No recent matches" : "No exact matches yet"}</h2><p>{session.items.length ? session.items.length < session.request.resultCount ? "These are all current matches available. Older videos were not used as filler." : session.recommendationMode === "single" ? "Choose one. Each card is a standalone option." : `${session.items.length} focused picks, ordered to flow naturally.` : session.emptyReason === "no_fresh_matches" ? "Try broader filters. Watchflow left outdated videos out of this set." : "Change a filter or broaden the source to continue."}</p>{filtersChanged && session.items.length > 0 && <span className="results-outdated"><Clock3 />Filters changed after this set was generated</span>}</div>{session.items.length > 0 && session.naturalEnd && <div className="session-stop"><Check /><span><strong>Natural stopping point</strong>No endless feed after video {session.items.length}</span></div>}</div>
-          {session.items.length ? <>{session.recommendationMode === "session" && <div className="session-timeline" aria-label={`${session.items.length} video session lasting ${session.totalMinutes} minutes`}>{session.items.map((video, index) => <span key={video.id} style={{ flex: video.duration }}><i>{index + 1}</i>{video.duration} min</span>)}<b>Done</b></div>}<div className={`recommendation-grid ${session.recommendationMode === "single" ? "single-mode" : ""}`}>{session.items.map((video) => <RecommendationCard key={video.id} video={video} live={mode === "live"} saved={saved.has(video.id)} onSave={() => void toggleSaved(video)} onPlay={() => void openVideo(video)} onReject={() => setFeedbackVideo(video)} />)}</div><div className="session-actions"><button className="button secondary next-set" type="button" onClick={() => void nextSet()} disabled={building || !session.hasMore}>{building ? <LoaderCircle className="spin" /> : <RefreshCcw />}{building ? "Finding another set…" : session.hasMore ? "Next set" : "No more matches"}</button><small>Previously shown videos will not repeat.</small></div></> : <div className="recommendation-empty"><Search /><strong>{mode === "live" && !signals.lastSyncedAt ? "Sync YouTube before your first live session" : session.page > 1 ? "You reached the end of these matches" : "Nothing fits every choice"}</strong><p>{mode === "live" && !signals.lastSyncedAt ? "Watchflow needs subscriptions and likes before it can rank real videos." : "We will never silently mix in a source you did not choose."}</p><div className="empty-actions">{mode === "live" && !signals.lastSyncedAt ? <button className="button secondary" type="button" onClick={() => void syncNow()} disabled={syncing}><RefreshCcw />Start sync</button> : <button className="button secondary" type="button" onClick={() => document.querySelector("#for-you")?.scrollIntoView({ behavior: "smooth" })}><SlidersHorizontal />Change filters</button>}{source !== "mixed" && <button className="button secondary" type="button" onClick={() => void generateSession("mixed")}><Users />Try Balanced instead</button>}</div></div>}
+          {session.items.length ? <>{session.recommendationMode === "session" && <div className="session-timeline" aria-label={`${session.items.length} video session lasting ${session.totalMinutes} minutes`}>{session.items.map((video, index) => <span key={video.id} style={{ flex: video.duration }}><i>{index + 1}</i>{video.duration} min</span>)}<b>Done</b></div>}<div className={`recommendation-grid ${session.recommendationMode === "single" ? "single-mode" : ""}`}>{session.items.map((video) => <RecommendationCard key={video.id} video={video} live={mode === "live"} saved={saved.has(video.id)} onSave={() => void toggleSaved(video)} onPlay={() => void openVideo(video)} onReject={() => openFeedback(video)} />)}</div><div className="session-actions"><button className="button secondary next-set" type="button" onClick={() => void nextSet()} disabled={building || !session.hasMore}>{building ? <LoaderCircle className="spin" /> : <RefreshCcw />}{building ? "Finding another set…" : session.hasMore ? "Next set" : "No more matches"}</button><small>Previously shown videos will not repeat.</small></div></> : <div className="recommendation-empty"><Search /><strong>{mode === "live" && !signals.lastSyncedAt ? "Sync YouTube before your first live session" : session.page > 1 ? "You reached the end of these matches" : "Nothing fits every choice"}</strong><p>{mode === "live" && !signals.lastSyncedAt ? "Watchflow needs subscriptions and likes before it can rank real videos." : "We will never silently mix in a source you did not choose."}</p><div className="empty-actions">{mode === "live" && !signals.lastSyncedAt ? <button className="button secondary" type="button" onClick={() => void syncNow()} disabled={syncing}><RefreshCcw />Start sync</button> : <button className="button secondary" type="button" onClick={() => document.querySelector("#for-you")?.scrollIntoView({ behavior: "smooth" })}><SlidersHorizontal />Change filters</button>}{source !== "mixed" && <button className="button secondary" type="button" onClick={() => void generateSession("mixed")}><Users />Try Balanced instead</button>}</div></div>}
         </section>
 
         <div className="utility-grid"><section className="utility-panel queue-panel" id="queue"><div className="section-header compact-header queue-header"><div><span className="section-kicker">Saved-video rescue</span><h2>Worth another look</h2><p>{mode === "live" ? "Your saved recommendations stay here between visits." : "Demo examples of videos that have been waiting too long."}</p></div><div className="queue-tools"><label><span>Sort saved videos</span><select value={queueSort} onChange={(event) => setQueueSort(event.target.value as QueueSort)}>{queueSortOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><ChevronDown /></label>{displayedQueue.length > 0 && <button className="button secondary" type="button" onClick={() => void openVideo(displayedQueue[Math.floor(Math.random() * displayedQueue.length)])}><Sparkles />Pick one</button>}</div></div>{displayedQueue.length ? <div className="queue-list">{displayedQueue.map((video) => <article key={video.id}><SafeImage src={video.image} alt="" /><div><span>Saved {new Date(video.savedAt).toLocaleDateString()}</span><h3>{video.title}</h3><p>{video.channel} · {video.duration} min · {video.published}</p></div><div className="queue-actions"><button className="icon-button" type="button" onClick={() => void openVideo(video)} aria-label={`Open ${video.title}`}><ChevronRight /></button><button className="icon-button remove-queue" type="button" onClick={() => void toggleSaved(video)} disabled={removingVideoId === video.id} aria-label={`Remove ${video.title} from queue`}>{removingVideoId === video.id ? <LoaderCircle className="spin" /> : <Trash2 />}</button></div></article>)}</div> : <div className="compact-empty"><Bookmark /><strong>Your queue is empty</strong><p>Save a recommendation and it will remain available here.</p></div>}</section>
           <section className="utility-panel path-panel" id="paths">{mode === "live" ? <div className="feature-unavailable"><Route /><span className="section-kicker">Learning paths</span><h2>Coming after your first sessions</h2><p>Live learning paths are not generated yet. Watchflow will never present demo progress as yours.</p></div> : <><div className="section-header compact-header"><div><span className="section-kicker">Continue learning</span><h2>Understanding the night sky</h2><p>1 of 4 demo steps completed</p></div><span className="path-progress">25%</span></div><div className="path-steps"><div className="complete"><span><Check /></span><div><strong>How to read the night sky</strong><small>Completed · 12 min</small></div></div><div className="current"><span>2</span><div><strong>Why Saturn has rings</strong><small>Up next · 18 min</small></div><Play /></div><div><span>3</span><div><strong>Finding planets from home</strong><small>15 min</small></div></div><div><span>4</span><div><strong>Your first telescope</strong><small>21 min</small></div></div></div></>}</section></div>
 
-        <div className="utility-grid bottom-grid" id="taste"><section className="utility-panel taste-panel profile-summary"><div className="section-header compact-header"><div><span className="section-kicker">Editable taste profile</span><h2>What Watchflow understands</h2><p>{profile.status === "completed" ? `Your ${mode === "live" ? "saved" : "local"} defaults guide every new session.` : "Balanced defaults are active until setup is complete."}</p></div><Brain /></div><div className="profile-summary-grid"><div><span>Interests</span><p>{profile.interests.map((interest) => interestOptions.find((item) => item.id === interest)?.label ?? interest).join(", ") || "Not set"}</p></div><div><span>Languages</span><p>{profile.languages.map((language) => languageLabels[language]).join(", ")}</p></div><div><span>Default source</span><p>{sourceOptions.find((option) => option.value === profile.defaultSource)?.label}</p></div><div><span>YouTube signals</span><p>{profile.useSubscriptions && profile.useLikedVideos ? "Subscriptions + likes" : profile.useSubscriptions ? "Subscriptions" : profile.useLikedVideos ? "Liked videos" : "Explicit profile only"}</p></div></div><div className="profile-actions"><button className="button secondary" type="button" onClick={() => { setEditingProfile(true); setOnboardingOpen(true); }}><SlidersHorizontal />Edit taste profile</button><button className="button secondary" type="button" onClick={() => setHistoryOpen(true)}><History />Manage watch history</button></div>{mode === "live" && <div className="account-actions"><button type="button" onClick={() => { if (window.confirm("Disconnect YouTube and remove imported YouTube data? Your taste profile will remain.")) void disconnectYoutube().then(() => window.location.reload()); }}>Disconnect YouTube</button><button className="danger" type="button" onClick={() => { if (window.confirm("Permanently delete your Watchflow account and all stored data?")) void deleteViewerAccount().then(() => window.location.reload()); }}>Delete account</button></div>}</section>
+        <div className="utility-grid bottom-grid" id="taste"><section className="utility-panel taste-panel profile-summary"><div className="section-header compact-header"><div><span className="section-kicker">Editable taste profile</span><h2>What Watchflow understands</h2><p>{profile.status === "completed" ? `Your ${mode === "live" ? "saved" : "local"} defaults guide every new session.` : "Balanced defaults are active until setup is complete."}</p></div><Brain /></div><div className="profile-summary-grid"><div><span>Interests</span><p>{profile.interests.map((interest) => interestOptions.find((item) => item.id === interest)?.label ?? interest).join(", ") || "Not set"}</p></div><div><span>Languages</span><p>{profile.languages.map((language) => languageLabels[language]).join(", ")}</p></div><div><span>Default source</span><p>{sourceOptions.find((option) => option.value === profile.defaultSource)?.label}</p></div><div><span>YouTube signals</span><p>{profile.useSubscriptions && profile.useLikedVideos ? "Subscriptions + likes" : profile.useSubscriptions ? "Subscriptions" : profile.useLikedVideos ? "Liked videos" : "Explicit profile only"}</p></div></div><div className="profile-actions"><button className="button secondary" type="button" onClick={() => { setEditingProfile(true); setOnboardingOpen(true); }}><SlidersHorizontal />Edit taste profile</button><button className="button secondary" type="button" onClick={() => setHistoryOpen(true)}><History />Manage watch history</button><button className="button secondary" type="button" onClick={() => setFeedbackManagerOpen(true)}><ThumbsDown />Manage feedback ({feedbackItems.length})</button></div>{mode === "live" && <div className="account-actions"><button type="button" onClick={() => { if (window.confirm("Disconnect YouTube and remove imported YouTube data? Your taste profile will remain.")) void disconnectYoutube().then(() => window.location.reload()); }}>Disconnect YouTube</button><button className="danger" type="button" onClick={() => { if (window.confirm("Permanently delete your Watchflow account and all stored data?")) void deleteViewerAccount().then(() => window.location.reload()); }}>Delete account</button></div>}</section>
           <section className="utility-panel diet-panel">{mode === "live" ? <div className="feature-unavailable"><BarChart3 /><span className="section-kicker">Content diet</span><h2>Not enough activity yet</h2><p>This view will activate when Watchflow has enough real opens and feedback to summarize your choices.</p></div> : <><div className="section-header compact-header"><div><span className="section-kicker">This week's content diet</span><h2>Balanced, with room to explore</h2><p>Demo visualization based on example activity.</p></div></div><div className="diet-bars"><div><span><b>Learning</b><small>42%</small></span><i><b style={{ width: "42%" }} /></i></div><div><span><b>Relaxation</b><small>28%</small></span><i><b style={{ width: "28%" }} /></i></div><div><span><b>Practical</b><small>19%</small></span><i><b style={{ width: "19%" }} /></i></div><div><span><b>New perspectives</b><small>11%</small></span><i><b style={{ width: "11%" }} /></i></div></div><p className="diet-note"><Lightbulb />This is demo data. Live activity tracking is not implemented.</p></>}</section></div>
         <section className="creator-note" id="creator-tools"><BarChart3 /><div><strong>Creator analytics stays optional</strong><p>Channel performance tools can live here later, without distracting from the viewer-first experience.</p></div><span>Future add-on</span></section>
       </main>
 
       <OnboardingModal open={onboardingOpen} profile={profile} signals={signals} editing={editingProfile} onProgress={persistProgress} onComplete={completeOnboarding} onSkip={skipOnboarding} onClose={closeOnboarding} onOpenHistory={() => setHistoryOpen(true)} />
       <WatchHistoryModal open={historyOpen} mode={mode} summary={{ count: historyItems.length, importedAt: signals.watchHistory.importedAt ?? null }} onClose={() => setHistoryOpen(false)} onImport={handleHistoryImport} onClear={handleHistoryClear} />
-      {feedbackVideo && <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setFeedbackVideo(null); }}><div className="feedback-dialog" role="dialog" aria-modal="true" aria-labelledby="feedback-title"><button className="icon-button dialog-close" type="button" onClick={() => setFeedbackVideo(null)} aria-label="Close"><X /></button><span className="feedback-icon"><ThumbsDown /></span><h2 id="feedback-title">Help us tune your recommendations</h2><p>Why isn't “{feedbackVideo.title}” right for you?</p><div>{feedbackReasons.map((reason) => <button key={reason.id} type="button" onClick={() => void submitFeedback(feedbackVideo, reason)}>{reason.label}<ChevronRight /></button>)}</div></div></div>}
-      {toast && <div className={`toast ${toast.tone ?? "success"}`} role="status"><span className="status-dot" />{toast.message}</div>}
+      {feedbackVideo && <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !feedbackBusyId) setFeedbackVideo(null); }}><div ref={feedbackDialogRef} className="feedback-dialog" role="dialog" aria-modal="true" aria-labelledby="feedback-title" aria-busy={feedbackBusyId === feedbackVideo.id}><button className="icon-button dialog-close" type="button" onClick={() => setFeedbackVideo(null)} aria-label="Close" disabled={Boolean(feedbackBusyId)}><X /></button><span className="feedback-icon"><ThumbsDown /></span><h2 id="feedback-title">Help us tune your recommendations</h2><p>Why isn't “{feedbackVideo.title}” right for you?</p>{feedbackVideo.topics.length > 0 && <label className="feedback-topic"><span>Topic affected by “show less”</span><select value={feedbackTopic} onChange={(event) => setFeedbackTopic(event.target.value)} disabled={Boolean(feedbackBusyId)}>{feedbackVideo.topics.map((topic) => <option key={topic} value={topic}>{interestOptions.find((item) => item.id === topic)?.label ?? topic}</option>)}</select><ChevronDown /></label>}<div>{feedbackReasons.map((reason) => <button key={reason.id} type="button" onClick={() => void submitFeedback(feedbackVideo, reason)} disabled={Boolean(feedbackBusyId) || (reason.id === "less_topic" && !feedbackTopic)}>{reason.id === "less_topic" && feedbackTopic ? `Show less about ${interestOptions.find((item) => item.id === feedbackTopic)?.label ?? feedbackTopic}` : reason.label}<ChevronRight /></button>)}</div>{feedbackBusyId === feedbackVideo.id && <span className="feedback-saving" role="status"><LoaderCircle className="spin" />Saving feedback…</span>}<small>Channel, topic and length preferences gradually fade over 30 days. This video stays hidden until you undo the feedback.</small></div></div>}
+      {feedbackManagerOpen && <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !feedbackBusyId) setFeedbackManagerOpen(false); }}><div ref={feedbackDialogRef} className="feedback-dialog feedback-manager" role="dialog" aria-modal="true" aria-labelledby="feedback-manager-title" aria-busy={Boolean(feedbackBusyId)}><button className="icon-button dialog-close" type="button" onClick={() => setFeedbackManagerOpen(false)} aria-label="Close" disabled={Boolean(feedbackBusyId)}><X /></button><span className="feedback-icon"><SlidersHorizontal /></span><h2 id="feedback-manager-title">Recommendation feedback</h2><p>Review hidden videos and temporary preferences. Removing an item allows that video to appear again.</p>{feedbackItems.length ? <div className="feedback-list">{feedbackItems.map((item) => <article key={item.videoId}><SafeImage src={item.video.image} alt="" /><div><strong>{item.video.title}</strong><span>{item.video.channel} · {feedbackLabels[item.reason]}{item.targetTopics[0] ? ` · ${item.targetTopics[0]}` : ""}</span><small>{item.preferenceExpiresAt ? new Date(item.preferenceExpiresAt) > new Date() ? `Preference fades by ${new Date(item.preferenceExpiresAt).toLocaleDateString()}` : "Preference effect expired; video remains hidden" : "Hidden until removed"}</small></div><button className="icon-button remove-queue" type="button" onClick={() => void deleteFeedbackItem(item.videoId)} aria-label={`Remove feedback for ${item.video.title}`} disabled={Boolean(feedbackBusyId)}>{feedbackBusyId === item.videoId ? <LoaderCircle className="spin" /> : <Trash2 />}</button></article>)}</div> : <div className="compact-empty"><ThumbsDown /><strong>No saved feedback</strong><p>Your recommendation corrections will appear here.</p></div>}{feedbackItems.length > 0 && <button className="button secondary clear-feedback" type="button" onClick={() => void deleteAllFeedback()} disabled={Boolean(feedbackBusyId)}>{feedbackBusyId === "all" ? <LoaderCircle className="spin" /> : <Trash2 />}Clear all feedback</button>}</div></div>}
+      {toast && <div className={`toast ${toast.tone ?? "success"}`} role="status"><span className="status-dot" />{toast.message}{toast.action && <button type="button" onClick={() => { toast.action?.onClick(); setToast(null); }}>{toast.action.label}</button>}</div>}
     </div>
   );
 }

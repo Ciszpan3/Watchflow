@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDemoSession, recommendations, sessionDuration } from "./viewerData";
 import { defaultViewerProfile } from "./viewerApi";
-import type { Recommendation, RecommendationSessionRequest } from "./viewerTypes";
+import type { Recommendation, RecommendationSessionRequest, ViewerFeedbackItem } from "./viewerTypes";
 
 const request: RecommendationSessionRequest = {
   minutes: 45,
@@ -91,5 +91,34 @@ describe("viewer recommendation sessions", () => {
     const profile = { ...defaultViewerProfile, useLikedVideos: false, interests: ["science"] };
     const result = createDemoSession({ ...request, source: "subscribed", intent: "entertain" }, profile, [unrelated]);
     expect(result.items[0].recommendationSignals).not.toContain("Taste profile match");
+  });
+
+  it("keeps a corrected video hidden and applies only the selected temporary scope", () => {
+    const science = { ...recommendations[0], id: "science-feedback", topics: ["science"], likedAffinity: 80 };
+    const design = { ...recommendations[0], id: "design-feedback", channel: "Design Channel", topics: ["design"], likedAffinity: 80 };
+    const hidden = { ...recommendations[0], id: "hidden-feedback", channel: "Hidden Channel", topics: ["design"], likedAffinity: 100 };
+    const feedback: ViewerFeedbackItem[] = [{
+      videoId: "previous-science-video",
+      reason: "less_topic",
+      targetTopics: ["science"],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      preferenceExpiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+      video: { title: "Previous science video", channel: "Another Channel", image: "", duration: 14 }
+    }, {
+      videoId: hidden.id,
+      reason: "not_for_me",
+      targetTopics: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      preferenceExpiresAt: null,
+      video: { title: hidden.title, channel: hidden.channel, image: hidden.image, duration: hidden.duration }
+    }];
+    const result = createDemoSession(
+      { ...request, source: "subscribed", topics: [], resultCount: 3, timeLimitEnabled: false },
+      { ...defaultViewerProfile, interests: ["science", "design"] },
+      [science, design, hidden], [], 1, "feedback-chain", [], feedback
+    );
+    expect(result.items.map((video) => video.id)).toEqual([design.id, science.id]);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertSyncActive, mapWithConcurrency, selectSubscriptionChannels, subscriptionUploadPageSize } from "./viewerSync.js";
+import { assertSyncActive, frequentSubscriptionChannels, mapWithConcurrency, selectSubscriptionChannels, subscriptionUploadPageSize } from "./viewerSync.js";
 
 describe("viewer synchronization helpers", () => {
   it("keeps result order and respects the concurrency limit", async () => {
@@ -39,6 +39,29 @@ describe("viewer synchronization helpers", () => {
       "liked",
       "older-a"
     ]);
+  });
+
+  it("reserves half of a limited sync for frequently watched subscriptions", () => {
+    const subscriptions = Array.from({ length: 8 }, (_, index) => ({ channelId: `channel-${index}`, newItemCount: index < 4 ? 10 - index : 0 }));
+    expect(selectSubscriptionChannels(subscriptions, new Set(), 0, 4, ["channel-7", "channel-6", "channel-5"])).toEqual([
+      "channel-7",
+      "channel-6",
+      "channel-0",
+      "channel-1"
+    ]);
+  });
+
+  it("matches imported history to safe creator-family name variants", () => {
+    const recent = new Date("2026-09-20T00:00:00.000Z");
+    const channels = [
+      { id: "smii7y", snippet: { title: "SMii7Y" } },
+      { id: "other", snippet: { title: "Other Channel" } }
+    ];
+    const history = [
+      ...Array.from({ length: 8 }, (_, index) => ({ videoId: `video-${index}`, title: `Video ${index}`, channelTitle: "SMii7Yplus", watchedAt: recent })),
+      ...Array.from({ length: 4 }, (_, index) => ({ videoId: `other-${index}`, title: `Other ${index}`, channelTitle: "Other Channel", watchedAt: recent }))
+    ];
+    expect(frequentSubscriptionChannels(channels, history, new Date("2026-10-01T00:00:00.000Z"))).toEqual(["smii7y"]);
   });
 
   it("keeps upload playlist requests within YouTube's page limit", () => {

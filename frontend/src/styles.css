@@ -297,8 +297,26 @@ input[type="range"] { width: 100%; height: 4px; margin: 2px 0; accent-color: var
 .feedback-dialog > div { display: grid; gap: 6px; }
 .feedback-dialog > div button { display: flex; align-items: center; justify-content: space-between; min-height: 42px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; color: #d4d4d8; background: #121215; cursor: pointer; font-size: 11px; text-align: left; }
 .feedback-dialog > div button:hover { border-color: #51515a; background: #202025; }
+.feedback-dialog > div button:disabled { cursor: not-allowed; opacity: .58; }
 .feedback-dialog > div button svg { width: 15px; color: var(--subtle); }
+.feedback-dialog > small { display: block; margin-top: 12px; color: var(--subtle); font-size: 9px; line-height: 1.5; }
+.feedback-saving { display: flex; align-items: center; min-height: 24px; gap: 7px; margin-top: 8px; color: var(--cyan); font-size: 9px; font-weight: 700; }
+.feedback-saving svg { width: 14px; }
+.feedback-topic { position: relative; display: grid; gap: 5px; margin: 0 0 12px; }
+.feedback-topic span { color: var(--subtle); font-size: 8px; font-weight: 750; text-transform: uppercase; }
+.feedback-topic select { width: 100%; min-height: 39px; padding: 0 34px 0 10px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: #121215; appearance: none; }
+.feedback-topic svg { position: absolute; right: 10px; bottom: 11px; width: 15px; pointer-events: none; color: var(--subtle); }
+.feedback-manager { width: min(620px, 100%); max-height: min(720px, calc(100vh - 36px)); overflow: auto; }
+.feedback-list { display: grid; gap: 7px; }
+.feedback-list article { display: grid; grid-template-columns: 58px minmax(0, 1fr) 36px; align-items: center; gap: 10px; min-height: 68px; padding: 7px; border: 1px solid var(--border); border-radius: 6px; background: #121215; }
+.feedback-list article > img, .feedback-list article > .image-fallback { width: 58px; height: 44px; border-radius: 4px; object-fit: cover; }
+.feedback-list article > div { display: grid; min-width: 0; gap: 3px; }
+.feedback-list article strong { overflow: hidden; color: #ededee; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.feedback-list article span, .feedback-list article small { color: var(--subtle); font-size: 8px; line-height: 1.4; }
+.feedback-list article button { display: grid; min-height: 36px; padding: 0; }
+.clear-feedback { width: 100%; margin-top: 12px; }
 .toast { position: fixed; right: 24px; bottom: 24px; z-index: 90; display: flex; align-items: center; max-width: min(390px, calc(100vw - 32px)); min-height: 48px; gap: 10px; padding: 10px 15px; border: 1px solid #285846; border-radius: 7px; color: #dff8ed; background: #13231d; box-shadow: 0 16px 44px rgb(0 0 0 / 40%); font-size: 11px; line-height: 1.4; }
+.toast button { margin-left: auto; border: 0; color: #fff; background: transparent; cursor: pointer; font: inherit; font-weight: 800; text-decoration: underline; }
 .toast.info { color: #d9f7fa; border-color: #28545c; background: #112329; }
 .status-dot { width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px rgb(54 211 153 / 10%); }
 .toast.info .status-dot { background: var(--cyan); }
@@ -480,7 +498,7 @@ input[type="range"] { width: 100%; height: 4px; margin: 2px 0; accent-color: var
 .profile-summary-grid > div { min-width: 0; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: #121215; }
 .profile-summary-grid span { display: block; margin-bottom: 5px; color: var(--subtle); font-size: 8px; font-weight: 700; text-transform: uppercase; }
 .profile-summary-grid p { overflow: hidden; margin: 0; color: #d3d3d7; font-size: 10px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
-.profile-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+.profile-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
 .profile-actions .button { min-width: 0; }
 
 /* Onboarding */

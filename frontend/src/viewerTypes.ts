@@ -8,6 +8,7 @@ export type ResultCount = 3 | 5 | 10;
 export type MaxAgeMonths = 1 | 3 | 6 | 12 | 24 | null;
 export type FitTier = "excellent" | "strong" | "good" | "exploratory";
 export type QueueSort = "saved_newest" | "saved_oldest" | "published_newest" | "published_oldest" | "shortest" | "longest";
+export type ViewerFeedbackReason = "already_watched" | "not_for_me" | "less_topic" | "too_long" | "too_often";
 
 export type ViewerProfile = {
   version: 2;
@@ -141,4 +142,14 @@ export type WatchHistoryImportItem = {
 export type WatchHistorySummary = {
   count: number;
   importedAt: string | null;
+};
+
+export type ViewerFeedbackItem = {
+  videoId: string;
+  reason: ViewerFeedbackReason;
+  targetTopics: string[];
+  createdAt: string;
+  updatedAt: string;
+  preferenceExpiresAt: string | null;
+  video: { title: string; channel: string; image: string; duration: number };
 };

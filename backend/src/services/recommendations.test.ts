@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { buildDiscoveryLanes, creatorFamilyName, discoveryLaneCapacity, discoveryPreferenceScore, discoverySearchQuery, fitTier, freshnessForVideo, freshnessReason, gamingInterestKeys, hasStrongTopicEvidence, historyAffinity, historyTermsForSearch, isLowTrustDiscoveryTitle, isPopularNewCreator, normalizeSessionTopics, searchCacheKey, searchDurationForFormats, subscriptionCandidateExpiration, topicCategoryMismatch, youtubeSearchParameters } from "./recommendations.js";
+import { VideoSource } from "../generated/prisma/enums.js";
+import { buildCreatorAffinities, buildDiscoveryLanes, controlledGamingOverride, creatorFamilyName, discoveryLaneCapacity, discoveryPreferenceScore, discoverySearchQuery, favoriteSubscriptionSlots, feedbackDecay, feedbackPenaltyForVideo, fitTier, freshnessForVideo, freshnessReason, gamingInterestKeys, hasStrongTopicEvidence, historyAffinity, historyTermsForSearch, isLowTrustDiscoveryTitle, isPopularNewCreator, normalizeSessionTopics, searchCacheKey, searchDurationForFormats, selectCandidates, subscriptionCandidateExpiration, topicCategoryMismatch, youtubeSearchParameters } from "./recommendations.js";
 
 const now = new Date("2026-09-20T12:00:00.000Z");
 
@@ -202,6 +203,106 @@ describe("recommendation freshness", () => {
     expect(creatorFamilyName("Mehalic POPs")).toBe(creatorFamilyName("More Mehalic"));
     expect(creatorFamilyName("SMii7Y")).toBe(creatorFamilyName("SMii7Yplus"));
     expect(creatorFamilyName("JudeHigh")).toBe(creatorFamilyName("JudeLow"));
+  });
+
+  it("reserves about half of subscription results for frequently watched creators", () => {
+    expect(favoriteSubscriptionSlots(10, "subscribed")).toBe(5);
+    expect(favoriteSubscriptionSlots(5, "subscribed")).toBe(3);
+    expect(favoriteSubscriptionSlots(10, "mixed")).toBe(3);
+    expect(favoriteSubscriptionSlots(10, "new")).toBe(0);
+  });
+
+  it("actually fills about half of a ten-result subscription set with favorite creators", () => {
+    const scored = [
+      ...Array.from({ length: 6 }, (_, index) => ({ id: `favorite-${index}`, frequent: true, score: 50 })),
+      ...Array.from({ length: 10 }, (_, index) => ({ id: `regular-${index}`, frequent: false, score: 100 - index }))
+    ].map((item) => ({
+      candidate: {
+        source: VideoSource.SUBSCRIBED,
+        video: { id: item.id, channelId: `channel-${item.id}`, title: item.id, topics: ["gaming"] },
+        topicOverride: false
+      },
+      match: item.score,
+      reason: "Test",
+      signals: ["Test"],
+      durationMinutes: 10,
+      frequentCreator: item.frequent
+    }));
+    const selected = selectCandidates(scored as never, {
+      minutes: 60,
+      timeLimitEnabled: false,
+      recommendationMode: "single",
+      resultCount: 10,
+      intent: "entertain",
+      source: "subscribed",
+      topics: ["gaming"],
+      formats: ["standard"],
+      languages: ["en"],
+      maxAgeMonths: 12,
+      audioFriendly: false,
+      antiClickbait: true
+    });
+    expect(selected).toHaveLength(10);
+    expect(selected.filter((item) => item.frequentCreator)).toHaveLength(5);
+    expect(Math.max(...[...new Set(selected.map((item) => item.candidate.video.channelId))].map((channelId) => selected.filter((item) => item.candidate.video.channelId === channelId).length))).toBeLessThanOrEqual(2);
+  });
+
+  it("builds a recency-aware creator affinity without letting repeat watches dominate", () => {
+    const recent = new Date(now.getTime() - 10 * 86_400_000);
+    const old = new Date(now.getTime() - 500 * 86_400_000);
+    const history = [
+      ...Array.from({ length: 20 }, () => ({ videoId: "repeat", title: "The same upload", channelTitle: "SMii7Y", topics: ["gaming"], watchedAt: recent })),
+      ...Array.from({ length: 6 }, (_, index) => ({ videoId: `unique-${index}`, title: `Co-op game ${index}`, channelTitle: "SMii7Yplus", topics: ["gaming"], watchedAt: index < 4 ? recent : old }))
+    ];
+    const corpus = Array.from({ length: 8 }, (_, index) => ({
+      channelId: "channel-1",
+      title: `Variety gameplay ${index}`,
+      description: "Funny multiplayer game with friends",
+      tags: ["gaming", "multiplayer"],
+      categoryId: index < 2 ? "20" : "24",
+      topics: index < 2 ? ["gaming"] : [],
+      channel: { title: "SMii7Y" }
+    }));
+    const affinity = buildCreatorAffinities(history, corpus as never, new Set(["channel-1"]), new Set(["channel-1"]), new Set(), now).get(creatorFamilyName("SMii7Y"));
+    expect(affinity).toMatchObject({ frequent: true, uniqueHistoryCount: 7, historyCount: 26 });
+    expect(affinity!.weightedHistory).toBeLessThan(12);
+    expect(affinity!.score).toBeGreaterThan(25);
+  });
+
+  it("allows a controlled gaming override only for a proven frequent subscription", () => {
+    const entertainmentVideo = {
+      channelId: "channel-1",
+      title: "A chaotic co-op night",
+      description: "A multiplayer gameplay session",
+      tags: [],
+      categoryId: "24",
+      topics: [],
+      channel: { title: "Variety Crew" }
+    };
+    expect(controlledGamingOverride(entertainmentVideo as never, {
+      key: "varietycrew", title: "Variety Crew", historyCount: 40, uniqueHistoryCount: 20,
+      weightedHistory: 18, score: 24, frequent: true, gamingConfidence: 0.7
+    })).toBe(true);
+    expect(controlledGamingOverride(entertainmentVideo as never, {
+      key: "random", title: "Random", historyCount: 1, uniqueHistoryCount: 1,
+      weightedHistory: 1, score: 1, frequent: false, gamingConfidence: 0.7
+    })).toBe(false);
+  });
+
+  it("decays scoped feedback over 30 days while leaving unrelated scopes untouched", () => {
+    const target = { channelId: "channel-1", durationSeconds: 2_400, topics: ["gaming"] };
+    const recentFeedback = [{
+      reason: "TOO_LONG" as const,
+      targetTopics: [],
+      updatedAt: new Date(now.getTime() - 5 * 86_400_000),
+      video: { channelId: "other", durationSeconds: 1_800, topics: ["science"] }
+    }];
+    const expiredFeedback = recentFeedback.map((item) => ({ ...item, updatedAt: new Date(now.getTime() - 31 * 86_400_000) }));
+    expect(feedbackPenaltyForVideo(target, target.topics, recentFeedback, now)).toBeGreaterThan(0);
+    expect(feedbackPenaltyForVideo(target, target.topics, expiredFeedback, now)).toBe(0);
+    expect(feedbackDecay(new Date(now.getTime() - 15 * 86_400_000), now)).toBeCloseTo(0.5);
+    expect(feedbackPenaltyForVideo({ ...target, durationSeconds: 600 }, target.topics, recentFeedback, now)).toBe(0);
+    expect(feedbackPenaltyForVideo({ ...target, durationSeconds: 7_200 }, target.topics, recentFeedback, now)).toBe(0);
   });
 
   it("recognizes game-specific metadata instead of treating all gaming as equivalent", () => {

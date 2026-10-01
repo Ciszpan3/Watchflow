@@ -24,6 +24,8 @@ type Candidate = {
   source: VideoSource;
   video: Video & { channel: Channel };
   discoveryLane?: DiscoveryLane;
+  creatorAffinity?: CreatorAffinity;
+  topicOverride?: boolean;
 };
 
 function dayKeyPacific() {
@@ -45,7 +47,7 @@ async function reserveSearchCall() {
 }
 
 const freshnessCacheVersion = "creator-affinity-v19";
-const recommendationAlgorithmVersion = "creator-affinity-v20";
+const recommendationAlgorithmVersion = "creator-affinity-v21";
 const dayMs = 86_400_000;
 
 export function subscriptionCandidateExpiration(now = new Date()) {
@@ -111,7 +113,7 @@ export function searchDurationForFormats(formats: RecommendationRequest["formats
   return undefined;
 }
 
-type WatchHistorySignal = { title: string; channelTitle: string | null; topics: string[]; watchedAt?: Date };
+type WatchHistorySignal = { videoId?: string | null; title: string; channelTitle: string | null; topics: string[]; watchedAt?: Date };
 type DiscoveryTasteSignal = WatchHistorySignal & {
   origin: "history" | "subscription" | "liked";
   metadataText?: string;
@@ -284,6 +286,7 @@ type ScoredCandidate = {
   reason: string;
   signals: string[];
   durationMinutes: number;
+  frequentCreator: boolean;
 };
 
 export function freshnessForVideo(publishedAt: Date | null, maxAgeMonths: RecommendationRequest["maxAgeMonths"] = 12, now = new Date()) {
@@ -297,6 +300,51 @@ export function freshnessForVideo(publishedAt: Date | null, maxAgeMonths: Recomm
       : ageDays <= 365 ? "Published this year"
         : ageDays <= 730 ? "Published within 2 years" : "Older video allowed by your filter";
   return { allowed: true, penalty, signal };
+}
+
+export function feedbackDecay(updatedAt: Date, now = new Date()) {
+  const age = Math.max(0, now.getTime() - updatedAt.getTime());
+  return Math.max(0, 1 - age / (30 * dayMs));
+}
+
+type FeedbackSignal = {
+  reason: "ALREADY_WATCHED" | "NOT_FOR_ME" | "NOT_INTERESTED" | "TOO_LONG" | "TOO_OFTEN";
+  targetTopics: string[];
+  updatedAt: Date;
+  video: Pick<Video, "channelId" | "durationSeconds" | "topics">;
+};
+
+export function feedbackPenaltyForVideo(
+  video: Pick<Video, "channelId" | "durationSeconds" | "topics">,
+  effectiveVideoTopics: string[],
+  feedbackRows: FeedbackSignal[],
+  now = new Date()
+) {
+  let topicPenalty = 0;
+  let channelPenalty = 0;
+  let durationPenalty = 0;
+  const durationMinutes = Math.max(1, Math.ceil(video.durationSeconds / 60));
+  for (const feedback of feedbackRows) {
+    const decay = feedbackDecay(feedback.updatedAt, now);
+    if (decay <= 0) continue;
+    if (feedback.reason === "NOT_INTERESTED") {
+      const targetTopics = feedback.targetTopics.length ? feedback.targetTopics : feedback.video.topics;
+      if (overlap(effectiveVideoTopics, targetTopics).length) topicPenalty += 18 * decay;
+    }
+    if (feedback.reason === "TOO_OFTEN" && feedback.video.channelId === video.channelId) {
+      channelPenalty += 22 * decay;
+    }
+    if (feedback.reason === "TOO_LONG") {
+      const rejectedMinutes = Math.max(1, Math.ceil(feedback.video.durationSeconds / 60));
+      const lowerBound = Math.max(5, rejectedMinutes * 0.75);
+      const upperBound = rejectedMinutes * 1.35;
+      if (durationMinutes >= lowerBound && durationMinutes <= upperBound) {
+        const similarity = 1 - Math.min(1, Math.abs(durationMinutes - rejectedMinutes) / Math.max(5, rejectedMinutes * 0.35));
+        durationPenalty += 18 * decay * Math.max(0.35, similarity);
+      }
+    }
+  }
+  return Math.min(28, topicPenalty) + Math.min(24, channelPenalty) + Math.min(20, durationPenalty);
 }
 
 export function freshnessReason(source: "subscribed" | "new", signal: string) {
@@ -448,7 +496,7 @@ function gamingInterest(key: string) {
   return gamingInterests.find((interest) => interest.key === key);
 }
 
-function normalizeCreatorName(value: string) {
+export function normalizeCreatorName(value: string) {
   return value.toLowerCase().normalize("NFKD").replace(/[^\p{L}\p{N}]+/gu, "").trim();
 }
 
@@ -456,6 +504,150 @@ export function creatorFamilyName(value: string) {
   return normalizeCreatorName(value)
     .replace(/^(?:more|the)/u, "")
     .replace(/(?:plus|extra|clips|shorts|gaming|games|tv|pops|high|low)$/u, "");
+}
+
+type CreatorCorpusVideo = Pick<Video, "channelId" | "title" | "description" | "tags" | "categoryId" | "topics"> & {
+  channel: Pick<Channel, "title">;
+};
+
+export type CreatorAffinity = {
+  key: string;
+  title: string;
+  historyCount: number;
+  uniqueHistoryCount: number;
+  weightedHistory: number;
+  score: number;
+  frequent: boolean;
+  gamingConfidence: number;
+};
+
+function historyRecencyWeight(watchedAt: Date | undefined, now: Date) {
+  if (!watchedAt) return 0.35;
+  const ageDays = Math.max(0, (now.getTime() - watchedAt.getTime()) / dayMs);
+  return ageDays <= 90 ? 1 : ageDays <= 365 ? 0.65 : 0.35;
+}
+
+const genericGamingEvidence = /\b(gameplay|gaming|ranked|tournament|boss|speedrun|walkthrough|playthrough|multiplayer|esports?|patch|clutch|console|xbox|playstation|steam)\b/iu;
+
+function corpusText(video: CreatorCorpusVideo) {
+  return `${video.title} ${video.description ?? ""} ${video.tags.join(" ")}`.toLowerCase();
+}
+
+function confirmedGamingTokens(videos: CreatorCorpusVideo[]) {
+  const counts = new Map<string, number>();
+  for (const video of videos) {
+    if (video.categoryId !== "20" && !video.topics.includes("gaming")) continue;
+    for (const token of titleWords(corpusText(video))) counts.set(token, (counts.get(token) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .filter(([token, count]) => token.length >= 5 && count >= 2)
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 120)
+    .map(([token]) => token);
+}
+
+function hasLearnedGamingEvidence(video: CreatorCorpusVideo, learnedTokens: string[]) {
+  if (video.categoryId === "20" || video.topics.includes("gaming")) return true;
+  const text = corpusText(video);
+  if (genericGamingEvidence.test(text)) return true;
+  const tokens = [...titleWords(text)];
+  return tokens.some((token) => learnedTokens.some((learned) => token === learned || token.includes(learned) || learned.includes(token)));
+}
+
+export function buildCreatorAffinities(
+  historyRows: WatchHistorySignal[],
+  subscribedVideos: CreatorCorpusVideo[],
+  likedChannelIds = new Set<string>(),
+  openedChannelIds = new Set<string>(),
+  savedChannelIds = new Set<string>(),
+  now = new Date()
+) {
+  const historyRowsByCreator = new Map<string, WatchHistorySignal[]>();
+  const history = new Map<string, {
+    title: string;
+    count: number;
+    weighted: number;
+    identities: Set<string>;
+    identityCounts: Map<string, number>;
+  }>();
+  for (const row of historyRows) {
+    if (!row.channelTitle) continue;
+    const key = creatorFamilyName(row.channelTitle);
+    if (!key) continue;
+    const item = history.get(key) ?? { title: row.channelTitle, count: 0, weighted: 0, identities: new Set<string>(), identityCounts: new Map<string, number>() };
+    const identity = row.videoId ?? normalizeCreatorName(row.title);
+    const repeats = item.identityCounts.get(identity) ?? 0;
+    item.count += 1;
+    item.identities.add(identity);
+    item.identityCounts.set(identity, repeats + 1);
+    if (repeats < 3) item.weighted += historyRecencyWeight(row.watchedAt, now);
+    history.set(key, item);
+    const creatorRows = historyRowsByCreator.get(key) ?? [];
+    creatorRows.push(row);
+    historyRowsByCreator.set(key, creatorRows);
+  }
+
+  const videosByCreator = new Map<string, CreatorCorpusVideo[]>();
+  for (const video of subscribedVideos) {
+    const key = creatorFamilyName(video.channel.title);
+    const values = videosByCreator.get(key) ?? [];
+    values.push(video);
+    videosByCreator.set(key, values);
+  }
+  const learnedTokens = confirmedGamingTokens(subscribedVideos);
+  const rankedHistory = [...history.entries()].sort((left, right) => right[1].weighted - left[1].weighted);
+  const maximumWeight = rankedHistory[0]?.[1].weighted ?? 0;
+  const frequentKeys = new Set(rankedHistory
+    .filter(([, item]) => item.identities.size >= 5 && item.weighted >= Math.max(5, maximumWeight * 0.2))
+    .slice(0, 12)
+    .map(([key]) => key));
+  const channelSignals = new Map<string, { liked: boolean; opened: boolean; saved: boolean }>();
+  for (const video of subscribedVideos) {
+    const key = creatorFamilyName(video.channel.title);
+    const signals = channelSignals.get(key) ?? { liked: false, opened: false, saved: false };
+    signals.liked ||= likedChannelIds.has(video.channelId);
+    signals.opened ||= openedChannelIds.has(video.channelId);
+    signals.saved ||= savedChannelIds.has(video.channelId);
+    channelSignals.set(key, signals);
+  }
+
+  const affinities = new Map<string, CreatorAffinity>();
+  for (const [key, item] of history) {
+    const videos = videosByCreator.get(key) ?? [];
+    const creatorHistory = historyRowsByCreator.get(key) ?? [];
+    const uniqueHistory = [...new Map(creatorHistory.map((row) => [row.videoId ?? normalizeCreatorName(row.title), row])).values()];
+    const historyGamingEvidence = uniqueHistory.filter((row) => {
+      if (row.topics.includes("gaming")) return true;
+      const text = row.title.toLowerCase();
+      if (genericGamingEvidence.test(text)) return true;
+      const words = [...titleWords(text)];
+      return words.some((token) => learnedTokens.some((learned) => token === learned || token.includes(learned) || learned.includes(token)));
+    }).length;
+    const corpusGamingEvidence = videos.filter((video) => hasLearnedGamingEvidence(video, learnedTokens)).length;
+    const evidenceSampleSize = Math.min(videos.length, 20) + Math.min(uniqueHistory.length, 20);
+    const gamingConfidence = evidenceSampleSize
+      ? (Math.min(corpusGamingEvidence, 20) + Math.min(historyGamingEvidence, 20)) / evidenceSampleSize
+      : 0;
+    const signals = channelSignals.get(key) ?? { liked: false, opened: false, saved: false };
+    const historyScore = maximumWeight ? Math.min(24, (item.weighted / maximumWeight) * 24) : 0;
+    affinities.set(key, {
+      key,
+      title: item.title,
+      historyCount: item.count,
+      uniqueHistoryCount: item.identities.size,
+      weightedHistory: item.weighted,
+      score: historyScore + (signals.liked ? 5 : 0) + (signals.opened ? 3 : 0) + (signals.saved ? 4 : 0),
+      frequent: frequentKeys.has(key),
+      gamingConfidence: Math.min(1, gamingConfidence)
+    });
+  }
+  return affinities;
+}
+
+export function controlledGamingOverride(video: CreatorCorpusVideo, affinity: CreatorAffinity | undefined) {
+  return video.categoryId === "24"
+    && Boolean(affinity?.frequent)
+    && (affinity?.gamingConfidence ?? 0) >= 0.15;
 }
 
 type CreatorTaste = {
@@ -724,7 +916,7 @@ export function historyAffinity(video: Video & { channel: Channel }, candidateTo
   let best = 0;
   let hasSpecificMatch = Boolean(matchedAnchor);
   for (const row of rows) {
-    const sameChannel = Boolean(row.channelTitle && row.channelTitle.toLowerCase() === video.channel.title.toLowerCase());
+    const sameChannel = Boolean(row.channelTitle && creatorFamilyName(row.channelTitle) === creatorFamilyName(video.channel.title));
     const sharedWords = [...titleWords(`${row.title} ${row.channelTitle ?? ""}`)].filter((word) => videoWords.has(word));
     const sharedTopics = overlap(candidateTopics, row.topics);
     const specificScore = (sameChannel ? 16 : 0) + Math.min(12, sharedWords.length * 6) + (matchedAnchor ? 10 : 0);
@@ -747,7 +939,12 @@ export function discoveryLaneCapacity(resultCount: number, laneCount: number) {
   return laneCount > 1 ? Math.ceil(resultCount / laneCount) : resultCount;
 }
 
-function selectCandidates(scored: ScoredCandidate[], request: RecommendationRequest) {
+export function favoriteSubscriptionSlots(resultCount: number, source: RecommendationRequest["source"]) {
+  const subscribedSlots = source === "new" ? 0 : source === "subscribed" ? resultCount : Math.ceil(resultCount / 2);
+  return Math.ceil(subscribedSlots / 2);
+}
+
+export function selectCandidates(scored: ScoredCandidate[], request: RecommendationRequest) {
   const pools = {
     subscribed: scored.filter((item) => item.candidate.source === VideoSource.SUBSCRIBED),
     new: scored.filter((item) => item.candidate.source === VideoSource.NEW)
@@ -759,12 +956,13 @@ function selectCandidates(scored: ScoredCandidate[], request: RecommendationRequ
   const discoveryLaneCount = activeDiscoveryLaneCount;
   const discoveryLaneCap = discoveryLaneCapacity(request.resultCount, discoveryLaneCount);
   const creatorLaneCap = discoveryLaneCapacity(request.resultCount, 5);
+  const frequentCreatorTarget = favoriteSubscriptionSlots(request.resultCount, request.source);
   let totalMinutes = 0;
 
   for (const desiredSource of sourceOrder(request)) {
     const sourcePool = pools[desiredSource];
     const fallback = request.source === "mixed" ? pools[desiredSource === "new" ? "subscribed" : "new"] : [];
-    const options = [...sourcePool, ...fallback].sort((left, right) => {
+    const sortOptions = (values: ScoredCandidate[]) => [...values].sort((left, right) => {
       const penalty = (item: ScoredCandidate) => selected.reduce((sum, picked) => sum
         + (item.candidate.video.channelId === picked.candidate.video.channelId ? 18 : 0)
         + (item.candidate.discoveryLane?.key && item.candidate.discoveryLane.key === picked.candidate.discoveryLane?.key ? 16 : 0)
@@ -777,9 +975,15 @@ function selectCandidates(scored: ScoredCandidate[], request: RecommendationRequ
       return (singleDistance(left) - singleDistance(right))
         || ((right.match - penalty(right) - titlePenalty(right)) - (left.match - penalty(left) - titlePenalty(left)));
     });
+    const selectedFrequent = selected.filter((item) => item.candidate.source === VideoSource.SUBSCRIBED && item.frequentCreator).length;
+    const preferFrequent = desiredSource === "subscribed" && selectedFrequent < frequentCreatorTarget;
+    const frequent = preferFrequent ? sourcePool.filter((item) => item.frequentCreator) : [];
+    const regular = preferFrequent ? sourcePool.filter((item) => !item.frequentCreator) : sourcePool;
+    const options = [...sortOptions(frequent), ...sortOptions(regular), ...sortOptions(fallback)];
     const next = options.find((item) => {
       if (selected.some((picked) => picked.candidate.video.id === item.candidate.video.id)) return false;
-      if (item.candidate.source === VideoSource.NEW && selected.filter((picked) => picked.candidate.source === VideoSource.NEW && picked.candidate.video.channelId === item.candidate.video.channelId).length >= 2) return false;
+      if (selected.filter((picked) => picked.candidate.video.channelId === item.candidate.video.channelId).length >= 2) return false;
+      if (item.candidate.topicOverride && selected.some((picked) => picked.candidate.topicOverride && picked.candidate.video.channelId === item.candidate.video.channelId)) return false;
       if (item.candidate.discoveryLane) {
         const selectedFromLane = selected.filter((picked) => picked.candidate.discoveryLane?.key === item.candidate.discoveryLane?.key).length;
         const creatorLed = ["history", "subscription", "liked"].includes(item.candidate.discoveryLane.source);
@@ -864,32 +1068,47 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
     db.viewingActivity.findMany({ where: { userId, createdAt: { gt: new Date(Date.now() - 90 * 86_400_000) } }, include: { video: true } }),
     db.savedVideo.findMany({ where: { userId }, include: { video: true } })
   ]);
-  const candidates: Candidate[] = candidateRows.map((row) => ({
-    source: row.source,
-    video: row.video,
-    discoveryLane: row.source === VideoSource.NEW ? currentLanesByVideoId.get(row.videoId)?.[0] : undefined
-  }));
   const requestedTopics = request.topics.length ? request.topics : [...profile.interests, ...profile.customTopics];
+  const likedChannelIds = new Set(profile.useLikedVideos ? likedRows.map((row) => row.video.channelId) : []);
+  const openedChannelIds = new Set(activityRows.filter((row) => row.type === "OPENED").map((row) => row.video.channelId));
+  const savedChannelIds = new Set(savedRows.map((row) => row.video.channelId));
+  const creatorAffinities = profile.useWatchHistory
+    ? buildCreatorAffinities(
+      historyRows,
+      candidateRows.filter((row) => row.source === VideoSource.SUBSCRIBED).map((row) => row.video),
+      likedChannelIds,
+      openedChannelIds,
+      savedChannelIds
+    )
+    : new Map<string, CreatorAffinity>();
+  const candidates: Candidate[] = candidateRows.map((row) => {
+    const creatorAffinity = creatorAffinities.get(creatorFamilyName(row.video.channel.title));
+    const topicOverride = row.source === VideoSource.SUBSCRIBED
+      && request.topics.length === 1
+      && request.topics[0] === "gaming"
+      && controlledGamingOverride(row.video, creatorAffinity);
+    return {
+      source: row.source,
+      video: row.video,
+      creatorAffinity,
+      topicOverride,
+      discoveryLane: row.source === VideoSource.NEW ? currentLanesByVideoId.get(row.videoId)?.[0] : undefined
+    };
+  });
   const historyAnchors = profile.useWatchHistory ? historyTermsForSearch(historyRows, requestedTopics) : [];
   const likedTopics = profile.useLikedVideos ? likedRows.flatMap((row) => row.video.topics) : [];
-  const likedChannels = new Set(profile.useLikedVideos ? likedRows.map((row) => row.video.channelId) : []);
+  const likedChannels = likedChannelIds;
   const openedTopics = activityRows.filter((row) => row.type === "OPENED").flatMap((row) => row.video.topics);
   const savedTopics = savedRows.flatMap((row) => row.video.topics);
-  const historyChannels = new Set(historyRows.map((row) => row.channelTitle).filter((value): value is string => Boolean(value)));
   const excludedVideoIds = new Set([
     ...feedbackRows.map((row) => row.videoId),
     ...(profile.useWatchHistory ? historyRows.flatMap((row) => row.videoId ? [row.videoId] : []) : []),
     ...(options.excludedVideoIds ?? [])
   ]);
-  const dislikedTopics = feedbackRows.filter((row) => row.reason === "NOT_INTERESTED").flatMap((row) => row.video.topics);
-  const repeatedChannels = new Set(feedbackRows.filter((row) => row.reason === "TOO_OFTEN").map((row) => row.video.channelId));
-  const tooLongUntil = Date.now() - 14 * 86_400_000;
-  const avoidLong = feedbackRows.some((row) => row.reason === "TOO_LONG" && row.updatedAt.getTime() > tooLongUntil);
-
   const scored = candidates.flatMap((candidate) => {
     const source = candidate.source === VideoSource.SUBSCRIBED ? "subscribed" : "new";
     const video = candidate.video;
-    const topics = effectiveTopics(video);
+    const topics = [...new Set([...effectiveTopics(video), ...(candidate.topicOverride ? ["gaming"] : [])])];
     const freshness = freshnessForVideo(video.publishedAt, request.maxAgeMonths);
     const history = profile.useWatchHistory ? historyAffinity(video, topics, historyRows, historyAnchors) : { score: 0, matched: false, anchor: null };
     if (excludedVideoIds.has(video.id)) return [];
@@ -900,8 +1119,8 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
     const candidateLanguage = video.language === "pl" || video.language === "en" ? video.language : null;
     if (!request.formats.includes(video.format as never) || !candidateLanguage || !request.languages.includes(candidateLanguage)) return [];
     if (request.topics.length && !overlap(topics, request.topics).length) return [];
-    if (topicCategoryMismatch(video, request.topics.length ? request.topics : requestedTopics)) return [];
-    if (request.topics.length === 1 && !hasStrongTopicEvidence(video, request.topics[0])) return [];
+    if (!candidate.topicOverride && topicCategoryMismatch(video, request.topics.length ? request.topics : requestedTopics)) return [];
+    if (!candidate.topicOverride && request.topics.length === 1 && !hasStrongTopicEvidence(video, request.topics[0])) return [];
     if (overlap(topics, profile.excludedTopics).length) return [];
     if (request.audioFriendly && !video.audioFriendly) return [];
     if (source === "new" && currentDiscoveryLanes.length > 0 && !candidate.discoveryLane) return [];
@@ -920,14 +1139,12 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
       + overlap(topics, savedTopics).length * 6
       + history.score
       + discoveryAffinity
-      + (profile.useWatchHistory && historyChannels.has(video.channel.title) ? 4 : 0);
+      + (candidate.creatorAffinity?.score ?? 0);
     const affinityScore = Math.min(20, affinityRaw / 5);
     const durationMinutes = Math.max(1, Math.ceil(video.durationSeconds / 60));
     const durationScore = durationFit(durationMinutes, request);
     const popularity = popularityScore(video, source);
-    const feedbackPenalty = overlap(topics, dislikedTopics).length * 12
-      + (repeatedChannels.has(video.channelId) ? 18 : 0)
-      + (avoidLong && durationMinutes > 30 ? 12 : 0)
+    const feedbackPenalty = feedbackPenaltyForVideo(video, topics, feedbackRows)
       + (request.antiClickbait ? video.clickbaitScore * 0.15 : 0);
     const match = Math.max(0, Math.min(100, Math.round(intentScore + topicScore + affinityScore + durationScore + popularity - feedbackPenalty - freshness.penalty)));
     const sourceSignal = source === "subscribed" ? "From your subscriptions" : "New creator discovery";
@@ -943,13 +1160,14 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
           : candidate.discoveryLane.source === "liked" ? `Inspired by videos you liked from ${candidate.discoveryLane.label}`
             : `Broadens your ${candidate.discoveryLane.label} options`
       : null;
-    const tasteSignal = laneSignal ?? (history.matched
+    const favoriteSignal = candidate.creatorAffinity?.frequent ? "Frequently watched channel" : null;
+    const tasteSignal = favoriteSignal ?? laneSignal ?? (history.matched
       ? history.anchor ? `Similar to your ${history.anchor} viewing` : "Shares specific themes with your watch history"
       : affinityRaw >= 40 ? "Strong liked-video fit" : topicMatches[0] ? `Matches your ${topicMatches[0]} interest` : null);
     const intentSignal = intentMatch ? `Fits ${request.intent}` : null;
     const signals = [sourceSignal, intentSignal ?? popularitySignal ?? freshness.signal, tasteSignal ?? popularitySignal ?? freshness.signal].filter((signal): signal is string => Boolean(signal)).slice(0, 3);
     const reason = `${freshnessReason(source, freshness.signal)}.${intentSignal ? ` ${intentSignal}.` : ""}${tasteSignal ? ` ${tasteSignal}.` : ""}`;
-    return [{ candidate, match, reason, signals, durationMinutes }];
+    return [{ candidate, match, reason, signals, durationMinutes, frequentCreator: Boolean(candidate.creatorAffinity?.frequent) }];
   }).sort((left, right) => right.match - left.match);
 
   const selected = selectCandidates(scored, request);

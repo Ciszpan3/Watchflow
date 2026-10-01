@@ -3,7 +3,7 @@ import { env } from "../config/env.js";
 import { db } from "../db.js";
 import { SyncStatus, VideoSource } from "../generated/prisma/enums.js";
 import { isInvalidGrant, upsertChannels, upsertVideo, videoDetails, youtubeForUser } from "./youtubeLive.js";
-import { subscriptionCandidateExpiration } from "./recommendations.js";
+import { creatorFamilyName, subscriptionCandidateExpiration } from "./recommendations.js";
 
 const runningJobs = new Map<string, Promise<void>>();
 
@@ -100,20 +100,56 @@ export function selectSubscriptionChannels(
   subscriptions: SubscriptionSignal[],
   likedChannelIds: Set<string>,
   cursor: number,
-  requestedLimit: number
+  requestedLimit: number,
+  frequentChannelIds: string[] = []
 ) {
   const limit = Math.min(subscriptions.length, Math.max(1, Math.floor(requestedLimit) || 1));
+  const availableIds = new Set(subscriptions.map((item) => item.channelId));
+  const favorites = frequentChannelIds.filter((channelId) => availableIds.has(channelId)).slice(0, Math.ceil(limit / 2));
+  const favoriteSet = new Set(favorites);
   const recent = [...subscriptions]
-    .filter((item) => item.newItemCount > 0)
+    .filter((item) => item.newItemCount > 0 && !favoriteSet.has(item.channelId))
     .sort((left, right) => right.newItemCount - left.newItemCount)
     .map((item) => item.channelId);
   const recentSet = new Set(recent);
   const liked = subscriptions
     .map((item) => item.channelId)
     .filter((channelId) => likedChannelIds.has(channelId) && !recentSet.has(channelId));
-  const preferredSet = new Set([...recent, ...liked]);
+  const preferredSet = new Set([...favorites, ...recent, ...liked]);
   const remaining = subscriptions.map((item) => item.channelId).filter((channelId) => !preferredSet.has(channelId));
-  return [...new Set([...recent, ...liked, ...rotate(remaining, cursor, limit)])].slice(0, limit);
+  return [...new Set([...favorites, ...recent, ...liked, ...rotate(remaining, cursor, limit)])].slice(0, limit);
+}
+
+export function frequentSubscriptionChannels(
+  channels: Array<{ id?: string | null; snippet?: { title?: string | null } | null }>,
+  historyRows: Array<{ videoId?: string | null; title: string; channelTitle: string | null; watchedAt: Date }>,
+  now = new Date()
+) {
+  const byFamily = new Map<string, { weighted: number; unique: Set<string>; repeats: Map<string, number> }>();
+  for (const row of historyRows) {
+    if (!row.channelTitle) continue;
+    const family = creatorFamilyName(row.channelTitle);
+    if (!family) continue;
+    const value = byFamily.get(family) ?? { weighted: 0, unique: new Set<string>(), repeats: new Map<string, number>() };
+    const identity = row.videoId ?? row.title.toLowerCase();
+    const repeats = value.repeats.get(identity) ?? 0;
+    value.unique.add(identity);
+    value.repeats.set(identity, repeats + 1);
+    if (repeats < 3) {
+      const ageDays = Math.max(0, (now.getTime() - row.watchedAt.getTime()) / 86_400_000);
+      value.weighted += ageDays <= 90 ? 1 : ageDays <= 365 ? 0.65 : 0.35;
+    }
+    byFamily.set(family, value);
+  }
+  return channels.flatMap((channel) => {
+    const channelId = channel.id;
+    const title = channel.snippet?.title;
+    if (!channelId || !title) return [];
+    const history = byFamily.get(creatorFamilyName(title));
+    if (!history || history.unique.size < 5) return [];
+    return [{ channelId, weighted: history.weighted, unique: history.unique.size }];
+  }).sort((left, right) => right.weighted - left.weighted || right.unique - left.unique)
+    .map((item) => item.channelId);
 }
 
 export function subscriptionUploadPageSize(requestedSize: number) {
@@ -168,9 +204,14 @@ async function runSync(userId: string, jobId: string) {
     ]);
     await db.syncJob.update({ where: { id: jobId }, data: { likedVideosCount: likedVideoIds.length, phase: "recent_videos" } });
 
-    const account = await db.googleAccount.findUniqueOrThrow({ where: { userId } });
+    const [account, profile, historyRows] = await Promise.all([
+      db.googleAccount.findUniqueOrThrow({ where: { userId } }),
+      db.viewerProfile.findUnique({ where: { userId }, select: { useWatchHistory: true } }),
+      db.watchHistoryItem.findMany({ where: { userId }, orderBy: { watchedAt: "desc" }, take: 5000 })
+    ]);
     const availableSubscriptions = subscriptionSignals.filter((item) => validChannelIds.includes(item.channelId));
-    const selectedIds = selectSubscriptionChannels(availableSubscriptions, likedChannelIds, account.syncCursor, env.subscriptionChannelLimit);
+    const frequentChannelIds = profile?.useWatchHistory ? frequentSubscriptionChannels(channels, historyRows) : [];
+    const selectedIds = selectSubscriptionChannels(availableSubscriptions, likedChannelIds, account.syncCursor, env.subscriptionChannelLimit, frequentChannelIds);
     const selectedChannels = channels.filter((channel) => channel.id && selectedIds.includes(channel.id));
     const uploadVideoIdsByChannel = await mapWithConcurrency(selectedChannels, env.syncConcurrency, async (channel) => {
       assertActive();
