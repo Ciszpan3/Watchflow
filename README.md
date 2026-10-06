@@ -2,8 +2,6 @@
 
 Watchflow pomaga zwykłym użytkownikom YouTube znaleźć filmy dopasowane do dostępnego czasu, bieżącej intencji i własnego gustu. Zamiast nieskończonego feedu aplikacja buduje krótką, wyjaśnialną sesję albo proponuje wybrany zestaw alternatywnych filmów do obejrzenia.
 
-Projekt jest pełnostackową aplikacją portfolio: łączy bezpieczne Google OAuth, YouTube Data API, PostgreSQL, kontrolę limitów API oraz deterministyczny ranking, którego wynik użytkownik może zrozumieć i korygować.
-
 ## Co działa
 
 - logowanie Google i trwała sesja w cookie `HttpOnly`;
