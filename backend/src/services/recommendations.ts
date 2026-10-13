@@ -46,8 +46,8 @@ async function reserveSearchCall() {
   return reserved.count === 1;
 }
 
-const freshnessCacheVersion = "history-first-v23";
-const recommendationAlgorithmVersion = "history-first-v23";
+const freshnessCacheVersion = "history-first-v24";
+const recommendationAlgorithmVersion = "history-first-v24";
 const dayMs = 86_400_000;
 
 export function subscriptionCandidateExpiration(now = new Date()) {
@@ -369,7 +369,7 @@ export function freshnessReason(source: "subscribed" | "new", signal: string) {
 }
 
 function normalizeStoredRequest(value: Prisma.JsonValue): RecommendationRequest | null {
-  if (isRecommendationRequest(value)) return value;
+  if (isRecommendationRequest(value)) return normalizeRecommendationRequest(value);
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const legacyMode = "recommendationMode" in value && value.recommendationMode === "single" ? "single" : "session";
   const legacy = {
@@ -380,7 +380,13 @@ function normalizeStoredRequest(value: Prisma.JsonValue): RecommendationRequest 
     resultCount: "resultCount" in value ? value.resultCount : legacyMode === "single" ? 5 : 3,
     maxAgeMonths: "maxAgeMonths" in value ? value.maxAgeMonths : 12
   };
-  return isRecommendationRequest(legacy) ? legacy : null;
+  return isRecommendationRequest(legacy) ? normalizeRecommendationRequest(legacy) : null;
+}
+
+export function normalizeRecommendationRequest(request: RecommendationRequest): RecommendationRequest {
+  return request.sortBy === "newest" && request.maxAgeMonths !== 1
+    ? { ...request, maxAgeMonths: 1 }
+    : request;
 }
 
 export function normalizeSessionTopics(topics: string[]) {
@@ -444,6 +450,23 @@ export function hasStrongTopicEvidence(video: Pick<Video, "title" | "description
   if (video.categoryId === "28") return true;
   if (["25", "27"].includes(video.categoryId ?? "") && evidenceCount >= 1) return true;
   return evidenceCount >= 2;
+}
+
+export function hasExcludedTopicConflict(
+  video: Pick<Video, "categoryId">,
+  topics: string[],
+  excludedTopics: string[],
+  requestedTopics: string[]
+) {
+  const conflicts = overlap(topics, excludedTopics);
+  if (!conflicts.length) return false;
+  const primaryTopic = video.categoryId === "20" ? "gaming"
+    : video.categoryId === "10" ? "music"
+      : video.categoryId === "17" ? "health"
+        : null;
+  if (primaryTopic && excludedTopics.includes(primaryTopic)) return true;
+  if (conflicts.some((topic) => requestedTopics.includes(topic))) return true;
+  return !requestedTopics.length || !overlap(topics, requestedTopics).length;
 }
 
 function popularityScore(video: Video, source: "subscribed" | "new") {
@@ -1186,7 +1209,7 @@ function sessionResponse(session: {
 }
 
 export async function buildLiveSession(userId: string, request: RecommendationRequest, options: BuildSessionOptions = {}) {
-  request = { ...request, topics: normalizeSessionTopics(request.topics) };
+  request = normalizeRecommendationRequest({ ...request, topics: normalizeSessionTopics(request.topics) });
   const storedProfile = await db.viewerProfile.findUniqueOrThrow({ where: { userId } });
   const profile = serializeProfile(storedProfile);
   const historyRows = await db.watchHistoryItem.findMany({ where: { userId }, orderBy: { watchedAt: "desc" }, take: 5000 });
@@ -1277,7 +1300,7 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
     if (request.topics.length && !overlap(topics, request.topics).length) return [];
     if (!candidate.topicOverride && topicCategoryMismatch(video, request.topics.length ? request.topics : requestedTopics)) return [];
     if (!candidate.topicOverride && request.topics.length === 1 && !hasStrongTopicEvidence(video, request.topics[0])) return [];
-    if (overlap(topics, profile.excludedTopics).length) return [];
+    if (hasExcludedTopicConflict(video, topics, profile.excludedTopics, request.topics)) return [];
     if (request.audioFriendly && !video.audioFriendly) return [];
     if (source === "new" && currentDiscoveryLanes.length > 0 && !candidate.discoveryLane) return [];
 

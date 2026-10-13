@@ -88,13 +88,14 @@ describe("viewer recommendation sessions", () => {
   });
 
   it("shows the newest matching upload before a higher-scored older one", () => {
+    const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
     const older: Recommendation = {
       ...recommendations[0], id: "older-high-fit", source: "subscribed", likedAffinity: 100,
-      publishedAt: "2026-05-01T00:00:00.000Z"
+      publishedAt: daysAgo(20)
     };
     const newer: Recommendation = {
       ...recommendations[0], id: "newer-lower-fit", source: "subscribed", likedAffinity: 1,
-      publishedAt: "2026-09-20T00:00:00.000Z"
+      publishedAt: daysAgo(2)
     };
     const result = createDemoSession({
       ...request, source: "subscribed", sortBy: "newest", timeLimitEnabled: false
@@ -103,17 +104,18 @@ describe("viewer recommendation sessions", () => {
   });
 
   it("orders a mixed-source set globally by publication date", () => {
+    const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
     const subscribed = {
       ...recommendations[0], id: "subscribed-week-old", source: "subscribed" as const,
-      channel: "Subscribed channel", publishedAt: "2026-09-13T00:00:00.000Z"
+      channel: "Subscribed channel", publishedAt: daysAgo(7)
     };
     const discovered = {
       ...recommendations[1], id: "new-day-old", source: "new" as const,
-      channel: "New channel", publishedAt: "2026-09-19T00:00:00.000Z"
+      channel: "New channel", publishedAt: daysAgo(1)
     };
     const olderSubscribed = {
       ...recommendations[2], id: "subscribed-month-old", source: "subscribed" as const,
-      channel: "Another subscribed channel", publishedAt: "2026-08-20T00:00:00.000Z"
+      channel: "Another subscribed channel", publishedAt: daysAgo(25)
     };
     const result = createDemoSession({
       ...request, source: "mixed", sortBy: "newest", timeLimitEnabled: false
@@ -123,6 +125,22 @@ describe("viewer recommendation sessions", () => {
       "subscribed-week-old",
       "subscribed-month-old"
     ]);
+  });
+
+  it("never lets newest mode include a video older than 30 days", () => {
+    const recent = {
+      ...recommendations[0], id: "recent", source: "subscribed" as const,
+      publishedAt: new Date(Date.now() - 4 * 86_400_000).toISOString()
+    };
+    const stale = {
+      ...recommendations[1], id: "stale", source: "new" as const,
+      publishedAt: new Date(Date.now() - 45 * 86_400_000).toISOString()
+    };
+    const result = createDemoSession({
+      ...request, sortBy: "newest", maxAgeMonths: null, timeLimitEnabled: false
+    }, defaultViewerProfile, [stale, recent]);
+    expect(result.request.maxAgeMonths).toBe(1);
+    expect(result.items.map((video) => video.id)).toEqual(["recent"]);
   });
 
   it("does not claim a taste-profile match without a matching signal", () => {

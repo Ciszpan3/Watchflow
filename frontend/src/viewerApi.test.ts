@@ -101,6 +101,15 @@ describe("viewer profile adapter", () => {
     await expect(getSessionDraft("demo")).resolves.toMatchObject({ request: { sortBy: "best_match" } });
   });
 
+  it("normalizes an older unlimited newest draft to the last 30 days", async () => {
+    window.localStorage.setItem(VIEWER_SESSION_DRAFT_KEY, JSON.stringify({
+      request: { ...request, sortBy: "newest", maxAgeMonths: null }
+    }));
+    await expect(getSessionDraft("demo")).resolves.toMatchObject({
+      request: { sortBy: "newest", maxAgeMonths: 1 }
+    });
+  });
+
   it("keeps demo signals local without inventing imported counts", async () => {
     const signals = await getViewerSignals(true, defaultViewerProfile);
     expect(signals.mode).toBe("demo");

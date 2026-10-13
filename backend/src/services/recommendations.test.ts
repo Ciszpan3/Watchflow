@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { VideoSource } from "../generated/prisma/enums.js";
-import { buildCreatorAffinities, buildDiscoveryLanes, buildHistoryTasteProfile, controlledGamingOverride, creatorFamilyName, discoveryLaneCapacity, discoveryPreferenceScore, discoverySearchQuery, enrichWatchHistorySignals, favoriteSubscriptionSlots, feedbackDecay, feedbackPenaltyForVideo, fitTier, freshnessForVideo, freshnessReason, gamingInterestKeys, hasStrongTopicEvidence, historyAffinity, historyTermsForSearch, isLowTrustDiscoveryTitle, isPopularNewCreator, normalizeSessionTopics, recommendationSearchOrder, searchCacheKey, searchDurationForFormats, selectCandidates, subscriptionCandidateExpiration, topicCategoryMismatch, youtubeSearchParameters } from "./recommendations.js";
+import { buildCreatorAffinities, buildDiscoveryLanes, buildHistoryTasteProfile, controlledGamingOverride, creatorFamilyName, discoveryLaneCapacity, discoveryPreferenceScore, discoverySearchQuery, enrichWatchHistorySignals, favoriteSubscriptionSlots, feedbackDecay, feedbackPenaltyForVideo, fitTier, freshnessForVideo, freshnessReason, gamingInterestKeys, hasExcludedTopicConflict, hasStrongTopicEvidence, historyAffinity, historyTermsForSearch, isLowTrustDiscoveryTitle, isPopularNewCreator, normalizeRecommendationRequest, normalizeSessionTopics, recommendationSearchOrder, searchCacheKey, searchDurationForFormats, selectCandidates, subscriptionCandidateExpiration, topicCategoryMismatch, youtubeSearchParameters } from "./recommendations.js";
 
 const now = new Date("2026-09-20T12:00:00.000Z");
 
@@ -48,6 +48,15 @@ describe("recommendation freshness", () => {
   it("uses YouTube date ordering only for the newest recommendation mode", () => {
     expect(recommendationSearchOrder("newest", "viewCount")).toBe("date");
     expect(recommendationSearchOrder("best_match", "viewCount")).toBe("viewCount");
+  });
+
+  it("always gives newest mode a strict 30-day window", () => {
+    const request = {
+      minutes: 45, timeLimitEnabled: false, recommendationMode: "single", sortBy: "newest", resultCount: 10,
+      intent: "entertain", source: "mixed", topics: ["technology"], formats: ["standard"], languages: ["en"],
+      maxAgeMonths: null, audioFriendly: false, antiClickbait: true
+    } as Parameters<typeof normalizeRecommendationRequest>[0];
+    expect(normalizeRecommendationRequest(request)).toMatchObject({ sortBy: "newest", maxAgeMonths: 1 });
   });
 
   it.each([1, 3, 6, 12, 24] as const)("enforces the %s month limit", (months) => {
@@ -186,6 +195,27 @@ describe("recommendation freshness", () => {
     expect(hasStrongTopicEvidence(video("AI researcher explains model risk", "25", "News"), "technology")).toBe(true);
     expect(hasStrongTopicEvidence(video("Lesbian Space Princess review", "23"), "science")).toBe(false);
     expect(hasStrongTopicEvidence(video("NASA's new telescope might break physics", "28"), "science")).toBe(true);
+  });
+
+  it("does not reject a gaming video because of an incidental excluded music label", () => {
+    expect(hasExcludedTopicConflict(
+      { categoryId: "20" },
+      ["gaming", "music", "design"],
+      ["music"],
+      ["gaming"]
+    )).toBe(false);
+    expect(hasExcludedTopicConflict(
+      { categoryId: "10" },
+      ["music"],
+      ["music"],
+      ["gaming"]
+    )).toBe(true);
+    expect(hasExcludedTopicConflict(
+      { categoryId: "20" },
+      ["gaming", "music"],
+      ["music"],
+      []
+    )).toBe(true);
   });
 
   it("builds creator-led discovery lanes from history and subscriptions", () => {

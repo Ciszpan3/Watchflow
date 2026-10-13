@@ -90,14 +90,15 @@ export function normalizeSessionTopics(topics: string[] | undefined) {
 
 function normalizeRequest(request: Partial<RecommendationSessionRequest> | undefined): RecommendationSessionRequest | null {
   if (!request) return null;
+  const sortBy = request.sortBy ?? "best_match";
   return {
     ...request,
     timeLimitEnabled: request.timeLimitEnabled ?? true,
     recommendationMode: request.recommendationMode ?? "session",
-    sortBy: request.sortBy ?? "best_match",
+    sortBy,
     resultCount: (request.resultCount ?? (request.recommendationMode === "single" ? 5 : 3)) as ResultCount,
     topics: normalizeSessionTopics(request.topics),
-    maxAgeMonths: request.maxAgeMonths === undefined ? 12 : request.maxAgeMonths
+    maxAgeMonths: sortBy === "newest" ? 1 : request.maxAgeMonths === undefined ? 12 : request.maxAgeMonths
   } as RecommendationSessionRequest;
 }
 

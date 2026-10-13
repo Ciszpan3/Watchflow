@@ -8,6 +8,7 @@ import { serializeFeedback } from "../services/feedback.js";
 import { isProfileInput, isRecommendationRequest, isWatchHistoryImportItem, type WatchHistoryImportItem } from "../viewer/contracts.js";
 import { getOrCreateProfile, profileCreateData, serializeProfile } from "../viewer/profile.js";
 import { classifyStoredVideoTopics } from "../services/classification.js";
+import { normalizeRecommendationRequest } from "../services/recommendations.js";
 
 export const viewerRouter = Router();
 viewerRouter.use(optionalAuth, requireAuth);
@@ -156,10 +157,11 @@ viewerRouter.put("/session-draft", async (req, res, next) => {
       res.status(422).json({ error: "invalid_session_request", message: "Recommendation filters are invalid." });
       return;
     }
+    const request = normalizeRecommendationRequest(req.body);
     const draft = await db.viewerSessionDraft.upsert({
       where: { userId: (req as AuthenticatedRequest).authUser.id },
-      update: { request: req.body },
-      create: { userId: (req as AuthenticatedRequest).authUser.id, request: req.body }
+      update: { request },
+      create: { userId: (req as AuthenticatedRequest).authUser.id, request }
     });
     res.json({ request: draft.request, updatedAt: draft.updatedAt.toISOString() });
   } catch (error) {

@@ -231,6 +231,9 @@ export function createDemoSession(
   history: WatchHistoryImportItem[] = [],
   feedback: ViewerFeedbackItem[] = []
 ): RecommendationSessionResponse {
+  request = request.sortBy === "newest" && request.maxAgeMonths !== 1
+    ? { ...request, maxAgeMonths: 1 }
+    : request;
   const excluded = [...profile.excludedTopics];
   const excludedIds = new Set([
     ...excludedVideoIds,
@@ -240,7 +243,11 @@ export function createDemoSession(
   const sourceCandidates = videos.filter((video) => sourceAllowed(video, request.source) && !excludedIds.has(video.id));
   const filtered = sourceCandidates.filter((video) => {
     const matchesTopic = request.topics.length === 0 || overlap(video.topics, request.topics).length > 0;
-    const allowedTopic = overlap(video.topics, excluded).length === 0;
+    const excludedMatches = overlap(video.topics, excluded);
+    const selectedTopicOverridesIncidentalExclusion = request.topics.length > 0
+      && overlap(video.topics, request.topics).length > 0
+      && overlap(request.topics, excluded).length === 0;
+    const allowedTopic = excludedMatches.length === 0 || selectedTopicOverridesIncidentalExclusion;
     return matchesTopic
       && allowedTopic
       && withinSelectedAge(video, request.maxAgeMonths)
