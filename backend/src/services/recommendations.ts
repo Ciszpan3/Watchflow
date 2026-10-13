@@ -48,7 +48,7 @@ async function reserveSearchCall() {
 }
 
 const freshnessCacheVersion = "strict-topics-v25";
-const recommendationAlgorithmVersion = "strict-topics-v25";
+const recommendationAlgorithmVersion = "quality-first-newest-v26";
 const dayMs = 86_400_000;
 
 export function subscriptionCandidateExpiration(now = new Date()) {
@@ -123,8 +123,11 @@ export function searchDurationForFormats(formats: RecommendationRequest["formats
   return undefined;
 }
 
-export function recommendationSearchOrder(sortBy: RecommendationRequest["sortBy"], fallback: DiscoveryLane["order"]) {
-  return sortBy === "newest" ? "date" as const : fallback;
+export function recommendationSearchOrder(_sortBy: RecommendationRequest["sortBy"], fallback: DiscoveryLane["order"]) {
+  // YouTube's date order fills the first page with uploads that are too new to
+  // have reliable quality signals. Build the same trusted pool for both modes;
+  // Newest is applied deterministically after filtering and scoring.
+  return fallback;
 }
 
 export type WatchHistorySignal = { videoId?: string | null; title: string; channelTitle: string | null; topics: string[]; watchedAt?: Date };

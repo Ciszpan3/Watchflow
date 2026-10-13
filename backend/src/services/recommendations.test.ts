@@ -45,8 +45,9 @@ describe("recommendation freshness", () => {
     expect(current).not.toBe(searchCacheKey("science", "en", "standard", 12, undefined, undefined, "date"));
   });
 
-  it("uses YouTube date ordering only for the newest recommendation mode", () => {
-    expect(recommendationSearchOrder("newest", "viewCount")).toBe("date");
+  it("uses a quality-aware search pool before ordering newest results locally", () => {
+    expect(recommendationSearchOrder("newest", "viewCount")).toBe("viewCount");
+    expect(recommendationSearchOrder("newest", "relevance")).toBe("relevance");
     expect(recommendationSearchOrder("best_match", "viewCount")).toBe("viewCount");
   });
 
