@@ -2,27 +2,30 @@ import type { youtube_v3 } from "googleapis";
 import { parseIsoDurationToSeconds } from "./youtube.js";
 
 const topicKeywords: Record<string, string[]> = {
-  technology: ["technology", "tech", "software", "coding", "programming", "ai", "computer", "gadgets"],
-  science: ["science", "space", "physics", "biology", "astronomy", "chemistry", "ocean"],
-  history: ["history", "historical", "ancient", "war", "century", "archaeology"],
-  cooking: ["cooking", "recipe", "food", "kitchen", "bake", "ramen"],
-  design: ["design", "architecture", "interior", "typography", "creative"],
-  finance: ["finance", "money", "investing", "investment", "etf", "stock", "budget"],
+  technology: ["technology", "tech", "software", "coding", "programming", "artificial intelligence", "computer", "gadgets", "cybersecurity", "robotics"],
+  science: ["science", "space", "physics", "biology", "astronomy", "chemistry", "scientist", "research", "oceanography"],
+  history: ["history", "historical", "ancient", "medieval", "archaeology", "civilization", "world war", "cold war"],
+  cooking: ["cooking", "recipe", "kitchen", "baking", "chef", "meal prep", "cuisine"],
+  design: ["design", "architecture", "interior design", "typography", "graphic design", "industrial design", "ux design"],
+  finance: ["finance", "personal finance", "investing", "investment", "etf", "stock market", "budgeting", "financial freedom"],
   health: [
     "health", "fitness", "workout", "mobility", "nutrition", "wellness", "bodybuilding", "body building",
     "body transformation", "fitness journey", "transformation", "weight loss", "weight-loss", "fat loss", "exercise", "gym",
     "training", "physique", "diet", "calories", "strength", "cardio", "muscle", "metabolism",
     "zdrowie", "fitness", "trening", "siłownia", "sylwetka", "odchudzanie", "redukcja", "mięśnie", "metamorfoza", "przemiana"
   ],
-  gaming: ["gaming", "gameplay", "video game", "video games", "playstation", "xbox", "nintendo", "pc gaming", "steam", "gta", "minecraft", "fortnite", "roblox", "esports"],
-  music: ["music", "song", "album", "piano", "guitar", "concert"],
-  culture: ["culture", "society", "film", "cinema", "book", "philosophy"],
-  travel: ["travel", "city", "country", "trip", "guide", "prague"],
-  diy: ["diy", "build", "woodworking", "repair", "tools", "craft"]
+  gaming: ["gaming", "gameplay", "video game", "video games", "playstation", "xbox", "nintendo", "pc gaming", "steam", "esports"],
+  music: ["music", "song", "album", "piano", "guitar", "concert", "music video"],
+  culture: ["culture", "society", "cinema", "literature", "philosophy", "cultural history", "art history"],
+  travel: [
+    "travel", "travelling", "traveling", "tourism", "tourist", "travel vlog", "travel guide", "solo travel",
+    "backpacking", "road trip", "city break", "itinerary", "destination", "vacation", "places to visit"
+  ],
+  diy: ["diy", "do it yourself", "woodworking", "home repair", "restoration", "craft tutorial"]
 };
 
 const categoryTopics: Record<string, string[]> = {
-  "17": ["health"],
+  "19": ["travel"],
   "20": ["gaming"],
   "10": ["music"]
 };

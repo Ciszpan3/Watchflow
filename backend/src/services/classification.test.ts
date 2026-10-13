@@ -51,6 +51,13 @@ describe("YouTube video classification", () => {
     expect(topicSearchTerms("health")).toEqual(expect.arrayContaining(["fitness", "bodybuilding", "weight loss", "transformation"]));
   });
 
+  it("does not infer travel from generic city, country, trip or guide words", () => {
+    expect(classifyTopicsFromText("The frontline is moving towards this city")).not.toContain("travel");
+    expect(classifyTopicsFromText("Manchester City full game highlights")).not.toContain("travel");
+    expect(classifyTopicsFromText("A desert trip inside Roblox gameplay")).not.toContain("travel");
+    expect(classifyTopicsFromText("A practical solo travel guide")).toContain("travel");
+  });
+
   it("does not classify an ordinary baseball game as gaming", () => {
     const result = classifyVideo({
       snippet: { title: "Parents missed his big baseball game" },
@@ -59,9 +66,11 @@ describe("YouTube video classification", () => {
     expect(result.topics).not.toContain("gaming");
   });
 
-  it("uses YouTube category metadata for gaming and health", () => {
+  it("uses precise YouTube category metadata without treating all sports as health", () => {
     expect(classifyVideo({ snippet: { title: "Ranked match highlights", categoryId: "20" }, contentDetails: { duration: "PT12M" } }).topics).toContain("gaming");
-    expect(classifyVideo({ snippet: { title: "12 week progress update", categoryId: "17" }, contentDetails: { duration: "PT12M" } }).topics).toContain("health");
+    expect(classifyVideo({ snippet: { title: "Premier League full match", categoryId: "17" }, contentDetails: { duration: "PT12M" } }).topics).not.toContain("health");
+    expect(classifyVideo({ snippet: { title: "12 week fitness progress", categoryId: "17" }, contentDetails: { duration: "PT12M" } }).topics).toContain("health");
+    expect(classifyVideo({ snippet: { title: "A quiet journey", categoryId: "19" }, contentDetails: { duration: "PT12M" } }).topics).toContain("travel");
   });
 
   it("reuses stored metadata when enriching imported history", () => {

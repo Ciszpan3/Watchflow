@@ -18,6 +18,7 @@ type DiscoveryLane = {
   anchorTerms: string[];
   order: "relevance" | "viewCount" | "date";
   durationVariant: 0 | 1;
+  categoryId?: string;
 };
 
 type Candidate = {
@@ -46,8 +47,8 @@ async function reserveSearchCall() {
   return reserved.count === 1;
 }
 
-const freshnessCacheVersion = "history-first-v24";
-const recommendationAlgorithmVersion = "history-first-v24";
+const freshnessCacheVersion = "strict-topics-v25";
+const recommendationAlgorithmVersion = "strict-topics-v25";
 const dayMs = 86_400_000;
 
 export function subscriptionCandidateExpiration(now = new Date()) {
@@ -59,13 +60,22 @@ export function isPopularNewCreator(viewCount: bigint | null, likeCount: bigint 
   const likes = Number(likeCount ?? 0);
   const minimumViews = Math.max(25_000, env.minimumNewCreatorViews);
   if (views < minimumViews) return false;
-  if (views >= 100_000) return true;
-  return likes >= 500 || (views > 0 && likes / views >= 0.015);
+  if (!likes) return views >= 1_000_000;
+  const likeRate = likes / views;
+  if (views >= 1_000_000) return likeRate >= 0.003;
+  if (views >= 100_000) return likes >= 1_000 && likeRate >= 0.0075;
+  return likes >= 1_000 && likeRate >= 0.02;
 }
 
 export function isLowTrustDiscoveryTitle(title: string, channelTitle = "") {
-  return /\b(skibidi|slow english|good boy vs bad boy|ai generated)\b|\bepisode\s*\d+\b|\b(?:minecraft|roblox)\s+animation\b/iu.test(title)
-    || /(?:^|\W)(?:kids?|toons?)(?:$|\W)/iu.test(channelTitle);
+  const hashtagCount = (title.match(/#[\p{L}\p{N}_-]+/gu) ?? []).length;
+  const emojiCount = (title.match(/\p{Extended_Pictographic}/gu) ?? []).length;
+  const hypeCount = (title.match(/\b(?:viral|trending|fyp|shocking|insane|craziest|wild|must watch|surprise ending|sigma rizz)\b/giu) ?? []).length;
+  return /\b(skibidi|slow english|good boy vs bad boy|ai generated|sigma rizz|surprise ending)\b|\bepisode\s*\d+\b|\b(?:minecraft|roblox)\s+animation\b/iu.test(title)
+    || /(?:^|\W)(?:kids?|toons?)(?:$|\W)/iu.test(channelTitle)
+    || hashtagCount >= 3
+    || (emojiCount >= 3 && hypeCount >= 1)
+    || hypeCount >= 3;
 }
 
 const intentSearchTerms: Record<RecommendationRequest["intent"], string[]> = {
@@ -141,7 +151,6 @@ async function searchNewVideos(
   const subscriptions = await db.subscription.findMany({ where: { userId }, include: { channel: true } });
   const subscribedChannels = new Set(subscriptions.map((item) => item.channelId));
   const subscribedTitles = new Set(subscriptions.map((item) => creatorFamilyName(item.channel.title)));
-  const categoryId = topics.length === 1 && topics[0] === "gaming" ? "20" : undefined;
   const [subscriptionCandidates, likedRows] = await Promise.all([
     db.userVideoCandidate.findMany({
       where: { userId, source: VideoSource.SUBSCRIBED, expiresAt: { gt: new Date() } },
@@ -213,6 +222,7 @@ async function searchNewVideos(
     const query = lane.query;
     const videoDuration = searchDurationForFormats(request.formats, lane.durationVariant ?? index);
     const order = recommendationSearchOrder(request.sortBy, lane.order);
+    const categoryId = lane.categoryId;
     const key = searchCacheKey(query, language, request.formats.length === 1 ? request.formats[0] : undefined, request.maxAgeMonths, categoryId, videoDuration, order);
     const cached = await db.searchCache.findUnique({ where: { cacheKey: key } });
     let ids = cached && cached.expiresAt > new Date() ? cached.videoIds : [];
@@ -424,12 +434,6 @@ function effectiveTopics(video: Video & { channel: Channel }) {
   });
 }
 
-export function topicCategoryMismatch(video: Pick<Video, "categoryId">, requestedTopics: string[]) {
-  if (requestedTopics.length !== 1) return false;
-  if (requestedTopics[0] === "gaming") return video.categoryId !== "20";
-  return video.categoryId === "20";
-}
-
 const strongTopicEvidence: Record<string, string[]> = {
   technology: [
     "artificial intelligence", "ai", "software", "coding", "programming", "computer", "smartphone", "iphone", "android",
@@ -438,18 +442,125 @@ const strongTopicEvidence: Record<string, string[]> = {
   science: [
     "science", "physics", "chemistry", "biology", "astronomy", "telescope", "nasa", "climate", "glacier", "periodic table",
     "scientist", "research", "ncert", "weather", "el nino"
+  ],
+  history: [
+    "history", "historical", "ancient", "medieval", "archaeology", "civilization", "empire", "dynasty", "world war",
+    "cold war", "history documentary", "historia", "historyczny", "starożytny", "średniowiecze"
+  ],
+  cooking: [
+    "cooking", "recipe", "baking", "chef", "meal prep", "cuisine", "how to cook", "kitchen recipe", "gotowanie",
+    "przepis", "pieczenie", "kuchnia"
+  ],
+  design: [
+    "graphic design", "interior design", "industrial design", "web design", "ux design", "ui design", "architecture",
+    "typography", "branding", "projektowanie", "architektura", "design process"
+  ],
+  finance: [
+    "personal finance", "finance", "investing", "investment", "stock market", "stocks", "etf", "budgeting", "financial freedom",
+    "retirement", "portfolio", "finanse", "inwestowanie", "giełda", "budżet"
+  ],
+  health: [
+    "health", "fitness", "workout", "nutrition", "wellness", "bodybuilding", "weight loss", "fat loss", "mobility",
+    "exercise", "strength training", "mental health", "zdrowie", "trening", "siłownia", "odchudzanie", "dietetyka"
+  ],
+  gaming: [
+    "gaming", "gameplay", "video game", "video games", "walkthrough", "playthrough", "speedrun", "multiplayer", "esports",
+    "playstation", "xbox", "nintendo", "steam", "gra komputerowa", "gry komputerowe"
+  ],
+  music: [
+    "music", "music video", "official audio", "song", "album", "concert", "live performance", "piano", "guitar", "muzyka",
+    "piosenka", "koncert"
+  ],
+  culture: [
+    "culture", "society", "philosophy", "literature", "cinema", "cultural history", "art history", "book review", "kultura",
+    "społeczeństwo", "filozofia", "literatura"
+  ],
+  travel: [
+    "travel", "travelling", "traveling", "tourism", "tourist", "travel vlog", "travel guide", "solo travel", "backpacking",
+    "road trip", "city break", "itinerary", "destination", "vacation", "places to visit", "things to do", "48 hours in",
+    "days in", "biggest city", "podróż", "podróże", "turystyka", "wakacje", "zwiedzanie"
+  ],
+  diy: [
+    "diy", "do it yourself", "woodworking", "home repair", "restoration", "craft tutorial", "how to build", "how to make",
+    "zrób to sam", "renowacja", "stolarstwo", "naprawa"
   ]
 };
 
+const primaryTopicCategories: Record<string, string[]> = {
+  gaming: ["20"],
+  music: ["10"],
+  travel: ["19"],
+  technology: ["28"],
+  science: ["28"]
+};
+
+const blockedTopicCategories: Record<string, string[]> = {
+  technology: ["10", "17", "20"],
+  science: ["10", "17", "20"],
+  history: ["10", "17", "20"],
+  cooking: ["10", "17", "20", "25"],
+  design: ["17", "20"],
+  finance: ["10", "17", "20"],
+  health: ["10", "20"],
+  gaming: ["10", "17", "19", "25", "26", "27", "28"],
+  music: ["17", "19", "20", "25", "27", "28"],
+  culture: ["17", "20"],
+  travel: ["10", "17", "20", "25", "28"],
+  diy: ["10", "17", "20", "25"]
+};
+
+const sportsTerms = ["football", "soccer", "nfl", "nba", "premier league", "full game", "match highlights", "goals", "touchdown"];
+const topicConflictTerms: Record<string, string[]> = {
+  travel: [
+    ...sportsTerms,
+    "gameplay", "roblox", "minecraft", "video game", "esports", "songs playlist", "song playlist", "music playlist",
+    "official audio", "album mix", "travel compatibility", "travel match", "travel quiz"
+  ],
+  finance: ["gameplay", "gta online", "video game", "football", "soccer", "full game"],
+  health: ["gameplay", "video game", "full game", "match highlights"],
+  cooking: ["gameplay", "video game", "full game", "match highlights"],
+  technology: ["gameplay", "video game", "full game", "match highlights"],
+  science: ["gameplay", "video game", "full game", "match highlights"],
+  history: ["gameplay", "video game", "full game", "match highlights"],
+  design: ["gameplay", "video game", "full game", "match highlights"],
+  diy: ["gameplay", "video game", "full game", "match highlights"]
+};
+
+export function topicCategoryIdForSearch(topic: string) {
+  return primaryTopicCategories[topic]?.[0];
+}
+
+export function topicCategoryMismatch(video: Pick<Video, "categoryId">, requestedTopics: string[]) {
+  if (requestedTopics.length !== 1) return false;
+  const topic = requestedTopics[0];
+  if (topic === "gaming") return video.categoryId !== "20";
+  if (!video.categoryId) return false;
+  return blockedTopicCategories[topic]?.includes(video.categoryId) ?? false;
+}
+
 export function hasStrongTopicEvidence(video: Pick<Video, "title" | "description" | "tags" | "categoryId"> & { channel: Pick<Channel, "title" | "description"> }, topic: string) {
-  if (topic === "gaming") return video.categoryId === "20";
   const evidenceTerms = strongTopicEvidence[topic];
-  if (!evidenceTerms) return true;
-  const text = `${video.title} ${video.description ?? ""} ${video.tags.join(" ")} ${video.channel.title} ${video.channel.description ?? ""}`.toLowerCase();
-  const evidenceCount = evidenceTerms.filter((term) => containsPhrase(text, term)).length;
-  if (video.categoryId === "28") return true;
-  if (["25", "27"].includes(video.categoryId ?? "") && evidenceCount >= 1) return true;
-  return evidenceCount >= 2;
+  if (!evidenceTerms) return false;
+  if (topicCategoryMismatch(video, [topic])) return false;
+
+  const title = video.title.toLowerCase();
+  const tags = video.tags.join(" ").toLowerCase();
+  const description = (video.description ?? "").toLowerCase();
+  const decisiveMetadata = `${title} ${tags}`;
+  if ((topicConflictTerms[topic] ?? []).some((term) => containsPhrase(decisiveMetadata, term))) return false;
+  const titleHits = evidenceTerms.filter((term) => containsPhrase(title, term)).length;
+  const tagHits = evidenceTerms.filter((term) => containsPhrase(tags, term)).length;
+  const descriptionHits = evidenceTerms.filter((term) => containsPhrase(description, term)).length;
+  const categoryIsPrimary = primaryTopicCategories[topic]?.includes(video.categoryId ?? "") ?? false;
+
+  if (topic === "health" && video.categoryId === "17") {
+    const competitiveSports = sportsTerms.some((term) => containsPhrase(`${title} ${tags}`, term));
+    if (competitiveSports && titleHits === 0) return false;
+  }
+  if (["gaming", "music", "travel"].includes(topic) && categoryIsPrimary) return true;
+  if (categoryIsPrimary && titleHits + tagHits >= 1) return true;
+  if (titleHits >= 1) return true;
+  return tagHits >= 2 && descriptionHits >= 1;
 }
 
 export function hasExcludedTopicConflict(
@@ -462,7 +573,7 @@ export function hasExcludedTopicConflict(
   if (!conflicts.length) return false;
   const primaryTopic = video.categoryId === "20" ? "gaming"
     : video.categoryId === "10" ? "music"
-      : video.categoryId === "17" ? "health"
+      : video.categoryId === "19" ? "travel"
         : null;
   if (primaryTopic && excludedTopics.includes(primaryTopic)) return true;
   if (conflicts.some((topic) => requestedTopics.includes(topic))) return true;
@@ -930,7 +1041,7 @@ export function buildDiscoveryLanes(
 
   if (selectedCreators.length < 4) addCreator(watchedCreators.find((creator) => !creatorAlreadySelected(creator)), "history");
 
-  const laneSpecs: Array<{ key: string; label: string; source: DiscoveryLane["source"]; seedChannelTitle: string | null; preferredInterestKeys: string[]; anchorTerms: string[]; queryBase: string; order: DiscoveryLane["order"]; durationVariant: 0 | 1 }> = selectedCreators.slice(0, 4).map(({ creator, source }) => {
+  const laneSpecs: Array<{ key: string; label: string; source: DiscoveryLane["source"]; seedChannelTitle: string | null; preferredInterestKeys: string[]; anchorTerms: string[]; queryBase: string; order: DiscoveryLane["order"]; durationVariant: 0 | 1; categoryId?: string }> = selectedCreators.slice(0, 4).map(({ creator, source }) => {
     const rankedInterestEntries = [...creator.interestScores.entries()].sort((left, right) => right[1] - left[1]);
     const preferredInterests = rankedInterestEntries
       .filter(([key]) => {
@@ -960,7 +1071,8 @@ export function buildDiscoveryLanes(
         : interestQuery
           || (anchorQuery ? `${anchorQuery} ${requestedTopics.includes("gaming") ? "gameplay" : topic}` : `"${creator.title}" ${topic}`),
       order: interestQuery ? "viewCount" : "relevance",
-      durationVariant: 0
+      durationVariant: 0,
+      categoryId: requestedTopics.includes("gaming") ? "20" : undefined
     };
   });
 
@@ -974,7 +1086,8 @@ export function buildDiscoveryLanes(
       anchorTerms: [],
       queryBase: "funny multiplayer variety games",
       order: "viewCount",
-      durationVariant: 0
+      durationVariant: 0,
+      categoryId: "20"
     });
     laneSpecs.push({
       key: "explore:gaming-broad",
@@ -985,7 +1098,8 @@ export function buildDiscoveryLanes(
       anchorTerms: [],
       queryBase: "indie games gameplay",
       order: "viewCount",
-      durationVariant: 1
+      durationVariant: 1,
+      categoryId: "20"
     });
   } else {
     const topic = requestedTopics[0] ?? "interesting";
@@ -1000,7 +1114,8 @@ export function buildDiscoveryLanes(
       anchorTerms: [],
       queryBase: `${topic} ${intentTerm}`,
       order: "relevance",
-      durationVariant: 0
+      durationVariant: 0,
+      categoryId: topicCategoryIdForSearch(topic)
     });
     laneSpecs.push({
       key: `topic:${topic}:popular`,
@@ -1011,7 +1126,8 @@ export function buildDiscoveryLanes(
       anchorTerms: [],
       queryBase: topicTerms,
       order: "viewCount",
-      durationVariant: 1
+      durationVariant: 1,
+      categoryId: topicCategoryIdForSearch(topic)
     });
   }
 
@@ -1027,7 +1143,8 @@ export function buildDiscoveryLanes(
       anchorTerms: [],
       queryBase: `${term} ${requestedTopics[0] ?? "video"}`,
       order: "relevance",
-      durationVariant: 0
+      durationVariant: 0,
+      categoryId: requestedTopics.length === 1 ? topicCategoryIdForSearch(requestedTopics[0]) : undefined
     });
   }
 
@@ -1163,6 +1280,19 @@ export function selectCandidates(scored: ScoredCandidate[], request: Recommendat
     if (!next) continue;
     selected.push(next);
     totalMinutes += next.durationMinutes;
+  }
+
+  const backfill = request.sortBy === "newest"
+    ? [...scored].sort((left, right) => (right.candidate.video.publishedAt?.getTime() ?? 0) - (left.candidate.video.publishedAt?.getTime() ?? 0))
+    : scored;
+  for (const item of backfill) {
+    if (selected.length >= request.resultCount) break;
+    if (selected.some((picked) => picked.candidate.video.id === item.candidate.video.id)) continue;
+    if (selected.filter((picked) => picked.candidate.video.channelId === item.candidate.video.channelId).length >= 2) continue;
+    if (item.candidate.topicOverride && selected.some((picked) => picked.candidate.topicOverride && picked.candidate.video.channelId === item.candidate.video.channelId)) continue;
+    if (request.recommendationMode !== "single" && request.timeLimitEnabled && totalMinutes + item.durationMinutes > request.minutes) continue;
+    selected.push(item);
+    totalMinutes += item.durationMinutes;
   }
   return request.sortBy === "newest"
     ? selected.sort((left, right) => (right.candidate.video.publishedAt?.getTime() ?? 0) - (left.candidate.video.publishedAt?.getTime() ?? 0))

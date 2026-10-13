@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { VideoSource } from "../generated/prisma/enums.js";
-import { buildCreatorAffinities, buildDiscoveryLanes, buildHistoryTasteProfile, controlledGamingOverride, creatorFamilyName, discoveryLaneCapacity, discoveryPreferenceScore, discoverySearchQuery, enrichWatchHistorySignals, favoriteSubscriptionSlots, feedbackDecay, feedbackPenaltyForVideo, fitTier, freshnessForVideo, freshnessReason, gamingInterestKeys, hasExcludedTopicConflict, hasStrongTopicEvidence, historyAffinity, historyTermsForSearch, isLowTrustDiscoveryTitle, isPopularNewCreator, normalizeRecommendationRequest, normalizeSessionTopics, recommendationSearchOrder, searchCacheKey, searchDurationForFormats, selectCandidates, subscriptionCandidateExpiration, topicCategoryMismatch, youtubeSearchParameters } from "./recommendations.js";
+import { buildCreatorAffinities, buildDiscoveryLanes, buildHistoryTasteProfile, controlledGamingOverride, creatorFamilyName, discoveryLaneCapacity, discoveryPreferenceScore, discoverySearchQuery, enrichWatchHistorySignals, favoriteSubscriptionSlots, feedbackDecay, feedbackPenaltyForVideo, fitTier, freshnessForVideo, freshnessReason, gamingInterestKeys, hasExcludedTopicConflict, hasStrongTopicEvidence, historyAffinity, historyTermsForSearch, isLowTrustDiscoveryTitle, isPopularNewCreator, normalizeRecommendationRequest, normalizeSessionTopics, recommendationSearchOrder, searchCacheKey, searchDurationForFormats, selectCandidates, subscriptionCandidateExpiration, topicCategoryIdForSearch, topicCategoryMismatch, youtubeSearchParameters } from "./recommendations.js";
 
 const now = new Date("2026-09-20T12:00:00.000Z");
 
@@ -83,9 +83,12 @@ describe("recommendation freshness", () => {
     expect(isPopularNewCreator(999n)).toBe(false);
     expect(isPopularNewCreator(9_999n)).toBe(false);
     expect(isPopularNewCreator(24_999n, 10_000n)).toBe(false);
-    expect(isPopularNewCreator(30_000n, 600n)).toBe(true);
+    expect(isPopularNewCreator(30_000n, 600n)).toBe(false);
     expect(isPopularNewCreator(30_000n, 100n)).toBe(false);
-    expect(isPopularNewCreator(100_000n)).toBe(true);
+    expect(isPopularNewCreator(60_000n, 1_800n)).toBe(true);
+    expect(isPopularNewCreator(100_000n)).toBe(false);
+    expect(isPopularNewCreator(150_000n, 1_500n)).toBe(true);
+    expect(isPopularNewCreator(1_000_000n, 3_000n)).toBe(true);
   });
 
   it("keeps subscription candidates available longer than a sync cache", () => {
@@ -124,6 +127,54 @@ describe("recommendation freshness", () => {
     expect(topicCategoryMismatch({ categoryId: "20" }, ["finance"])).toBe(true);
     expect(topicCategoryMismatch({ categoryId: "20" }, ["technology", "gaming"])).toBe(false);
     expect(topicCategoryMismatch({ categoryId: "28" }, ["technology", "gaming"])).toBe(false);
+  });
+
+  it("uses strict category conflicts for every single-topic session", () => {
+    expect(topicCategoryMismatch({ categoryId: "17" }, ["travel"])).toBe(true);
+    expect(topicCategoryMismatch({ categoryId: "25" }, ["travel"])).toBe(true);
+    expect(topicCategoryMismatch({ categoryId: "20" }, ["finance"])).toBe(true);
+    expect(topicCategoryMismatch({ categoryId: "20" }, ["cooking"])).toBe(true);
+    expect(topicCategoryMismatch({ categoryId: "17" }, ["health"])).toBe(false);
+    expect(topicCategoryIdForSearch("travel")).toBe("19");
+    expect(topicCategoryIdForSearch("science")).toBe("28");
+  });
+
+  it("accepts real travel evidence and rejects the screenshot false positives", () => {
+    const video = (title: string, categoryId: string, description = "", tags: string[] = []) => ({
+      title,
+      description,
+      tags,
+      categoryId,
+      channel: { title: "Example", description: "" }
+    });
+    expect(hasStrongTopicEvidence(video("4 Days in Chongqing", "19"), "travel")).toBe(true);
+    expect(hasStrongTopicEvidence(video("48 Hours in Baguio | Solo Travel Vlog", "22"), "travel")).toBe(true);
+    expect(hasStrongTopicEvidence(video("I investigated the world's biggest city", "24"), "travel")).toBe(true);
+    expect(hasStrongTopicEvidence(video("The frontline is moving fast towards this city", "25", "War coverage"), "travel")).toBe(false);
+    expect(hasStrongTopicEvidence(video("Liverpool v Man City full game", "17"), "travel")).toBe(false);
+    expect(hasStrongTopicEvidence(video("Justin Bieber Best Songs Playlist Mix | Listen And Travel With Me", "19"), "travel")).toBe(false);
+    expect(hasStrongTopicEvidence(video("Cast Tests Their Travel Compatibility", "19", "A playful travel quiz", ["travel match"]), "travel")).toBe(false);
+    expect(hasStrongTopicEvidence(video(
+      "Roblox A Desert Trip, But It Got Wild",
+      "22",
+      "Subscribe for weekly travel planning and road trip tips",
+      ["roblox", "gameplay"]
+    ), "travel")).toBe(false);
+  });
+
+  it("requires strong evidence for non-travel topics too", () => {
+    const video = (title: string, categoryId: string, description = "", tags: string[] = []) => ({
+      title,
+      description,
+      tags,
+      categoryId,
+      channel: { title: "Example", description: "" }
+    });
+    expect(hasStrongTopicEvidence(video("Personal finance and ETF investing", "27"), "finance")).toBe(true);
+    expect(hasStrongTopicEvidence(video("GTA Online fastest money method", "20"), "finance")).toBe(false);
+    expect(hasStrongTopicEvidence(video("Premier League full game", "17"), "health")).toBe(false);
+    expect(hasStrongTopicEvidence(video("Full body fitness workout", "17"), "health")).toBe(true);
+    expect(hasStrongTopicEvidence(video("A science documentary about physics", "27"), "science")).toBe(true);
   });
 
   it("does not claim history affinity from a generic topic alone", () => {
@@ -483,11 +534,61 @@ describe("recommendation freshness", () => {
     expect(discoveryLaneCapacity(10, 1)).toBe(10);
   });
 
+  it("backfills an unused discovery-lane slot when other valid candidates exist", () => {
+    const laneCounts = [1, 3, 2, 2, 2];
+    const scored = laneCounts.flatMap((count, laneIndex) => Array.from({ length: count }, (_, itemIndex) => ({
+      candidate: {
+        source: VideoSource.NEW,
+        video: {
+          id: `lane-${laneIndex}-video-${itemIndex}`,
+          channelId: `channel-${laneIndex}-${itemIndex}`,
+          title: `Travel video ${laneIndex}-${itemIndex}`,
+          topics: ["travel"]
+        },
+        discoveryLane: {
+          key: `lane-${laneIndex}`,
+          label: `Lane ${laneIndex}`,
+          query: "travel",
+          source: "interest",
+          seedChannelTitle: null,
+          preferredInterestKeys: [],
+          anchorTerms: [],
+          order: "relevance",
+          durationVariant: 0
+        }
+      },
+      match: 80 - laneIndex - itemIndex,
+      reason: "Test",
+      signals: ["Test"],
+      durationMinutes: 10,
+      frequentCreator: false
+    })));
+    const selected = selectCandidates(scored as never, {
+      minutes: 60,
+      timeLimitEnabled: false,
+      recommendationMode: "single",
+      sortBy: "best_match",
+      resultCount: 10,
+      intent: "entertain",
+      source: "new",
+      topics: ["travel"],
+      formats: ["standard"],
+      languages: ["en"],
+      maxAgeMonths: 6,
+      audioFriendly: false,
+      antiClickbait: true
+    });
+    expect(selected).toHaveLength(10);
+  });
+
   it("filters recurring low-trust discovery patterns when anti-clickbait is enabled", () => {
     expect(isLowTrustDiscoveryTitle("GOOD BOY VS BAD BOY - Slow English Episode 47")).toBe(true);
     expect(isLowTrustDiscoveryTitle("Skibidi Soundwave - Season 7")).toBe(true);
     expect(isLowTrustDiscoveryTitle("JJ adventure - Minecraft Animation", "MS Toons")).toBe(true);
+    expect(isLowTrustDiscoveryTitle("TRAVEL with US! SURPRISE ENDING! #vlog #travel #fyp #trending")).toBe(true);
+    expect(isLowTrustDiscoveryTitle("VIRAL WILD INSANE city challenge")).toBe(true);
     expect(isLowTrustDiscoveryTitle("Minecraft redstone explained", "Block Lab")).toBe(false);
+    expect(isLowTrustDiscoveryTitle("48 Hours in Baguio | Solo Travel Vlog")).toBe(false);
     expect(isLowTrustDiscoveryTitle("A thoughtful Counter-Strike documentary")).toBe(false);
   });
 });
