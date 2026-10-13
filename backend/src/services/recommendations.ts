@@ -15,6 +15,7 @@ type DiscoveryLane = {
   source: "history" | "subscription" | "liked" | "interest" | "fallback";
   seedChannelTitle: string | null;
   preferredInterestKeys: string[];
+  allowedInterestKeys: string[];
   anchorTerms: string[];
   order: "relevance" | "viewCount" | "date";
   durationVariant: 0 | 1;
@@ -47,8 +48,8 @@ async function reserveSearchCall() {
   return reserved.count === 1;
 }
 
-const freshnessCacheVersion = "strict-topics-v25";
-const recommendationAlgorithmVersion = "quality-first-newest-v26";
+const freshnessCacheVersion = "personal-discovery-v27";
+const recommendationAlgorithmVersion = "personal-discovery-v27";
 const dayMs = 86_400_000;
 
 export function subscriptionCandidateExpiration(now = new Date()) {
@@ -134,6 +135,7 @@ export type WatchHistorySignal = { videoId?: string | null; title: string; chann
 type DiscoveryTasteSignal = WatchHistorySignal & {
   origin: "history" | "subscription" | "liked";
   metadataText?: string;
+  interestText?: string;
 };
 
 function discoveryMetadata(video: Pick<Video, "description" | "tags">) {
@@ -175,7 +177,8 @@ async function searchNewVideos(
       topics: row.video.topics,
       watchedAt: row.discoveredAt,
       origin: "subscription" as const,
-      metadataText: discoveryMetadata(row.video)
+      metadataText: discoveryMetadata(row.video),
+      interestText: row.video.tags.join(" ")
     })),
     ...(profile.useLikedVideos ? likedRows.map((row) => ({
       title: row.video.title,
@@ -183,7 +186,8 @@ async function searchNewVideos(
       topics: row.video.topics,
       watchedAt: row.importedAt,
       origin: "liked" as const,
-      metadataText: discoveryMetadata(row.video)
+      metadataText: discoveryMetadata(row.video),
+      interestText: row.video.tags.join(" ")
     })) : [])
   ];
   const lanes = buildDiscoveryLanes(tasteSignals, topics, request.intent, subscribedTitles);
@@ -249,6 +253,24 @@ async function searchNewVideos(
       });
     }
     await saveSearchCandidates(ids, lane);
+  }
+
+  if (quotaLimited && candidateVideoIds.size < request.resultCount) {
+    const reusableCandidates = await db.userVideoCandidate.findMany({
+      where: { userId, source: VideoSource.NEW, expiresAt: { gt: new Date() } },
+      include: { video: { include: { channel: true } } }
+    });
+    for (const candidate of reusableCandidates) {
+      if (candidateVideoIds.has(candidate.videoId)) continue;
+      const text = `${candidate.video.title} ${candidate.video.description ?? ""} ${candidate.video.tags.join(" ")} ${candidate.video.channel.title}`;
+      const decisiveText = `${candidate.video.title} ${candidate.video.tags.join(" ")}`;
+      const lane = lanes.find((item) => !topics.includes("gaming")
+        || !isPersonalDiscoveryLane(item)
+        || personalizedDiscoveryEvidence(item, text, decisiveText).matched);
+      if (!lane) continue;
+      candidateVideoIds.add(candidate.videoId);
+      lanesByVideoId.set(candidate.videoId, [lane]);
+    }
   }
   return { quotaLimited, candidateVideoIds, lanesByVideoId, lanes };
 }
@@ -619,6 +641,11 @@ const gamingInterests = [
   { key: "geoguessr", label: "GeoGuessr", query: "geoguessr", aliases: ["geoguessr"] }
 ] as const;
 
+const gamingStyleTerms = new Set([
+  "challenge", "competitive", "coop", "friends", "funny", "horror", "modded", "multiplayer", "party", "ranked",
+  "sandbox", "simulation", "simulator", "strategy", "survival", "variety"
+]);
+
 function containsPhrase(value: string, phrase: string) {
   const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`(?:^|[^\\p{L}\\p{N}])${escaped}(?:$|[^\\p{L}\\p{N}])`, "iu").test(value);
@@ -627,6 +654,31 @@ function containsPhrase(value: string, phrase: string) {
 export function gamingInterestKeys(value: string) {
   const normalized = value.toLowerCase();
   return gamingInterests.filter((interest) => interest.aliases.some((alias) => containsPhrase(normalized, alias))).map((interest) => interest.key);
+}
+
+export function personalizedDiscoveryEvidence(
+  lane: Pick<DiscoveryLane, "preferredInterestKeys" | "allowedInterestKeys" | "anchorTerms">,
+  value: string,
+  decisiveValue = value
+) {
+  const normalized = value.toLowerCase();
+  const candidateInterests = gamingInterestKeys(decisiveValue.toLowerCase());
+  const matchingInterests = candidateInterests.filter((key) => lane.preferredInterestKeys.includes(key));
+  const matchingAnchors = lane.anchorTerms.filter((term) => containsPhrase(normalized, term));
+  const requiredAnchorMatches = Math.min(2, lane.anchorTerms.length);
+  const hasUnsupportedSpecificInterest = candidateInterests.length > 0
+    && !candidateInterests.some((key) => lane.allowedInterestKeys.includes(key));
+  return {
+    matchingInterests,
+    matchingAnchors,
+    hasUnsupportedSpecificInterest,
+    matched: !hasUnsupportedSpecificInterest
+      && (matchingInterests.length > 0 || (requiredAnchorMatches > 0 && matchingAnchors.length >= requiredAnchorMatches))
+  };
+}
+
+function isPersonalDiscoveryLane(lane: DiscoveryLane) {
+  return lane.source === "history" || lane.source === "subscription" || lane.source === "liked";
 }
 
 export function discoveryPreferenceScore(
@@ -905,6 +957,31 @@ type CreatorTaste = {
   termScores: Map<string, number>;
 };
 
+function strongCreatorInterestKeys(creator: CreatorTaste) {
+  return [...creator.interestScores.entries()]
+    .filter(([key]) => {
+      const evidence = creator.interestEvidence.get(key);
+      if (!evidence) return false;
+      const historyVideos = evidence.history / 4;
+      const dominantHistoryPattern = historyVideos >= 6 && historyVideos >= creator.historyWeight * 0.3;
+      return dominantHistoryPattern || evidence.liked >= 12;
+    })
+    .sort((left, right) => right[1] - left[1])
+    .map(([key]) => key);
+}
+
+function strongCreatorAnchorTerms(creator: CreatorTaste, gaming: boolean) {
+  return [...creator.termScores.entries()]
+    .filter(([term, score]) => score >= 8 && (!gaming || gamingStyleTerms.has(term)))
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, 3)
+    .map(([term]) => term);
+}
+
+function hasCreatorDiscoveryEvidence(creator: CreatorTaste, gaming: boolean) {
+  return strongCreatorInterestKeys(creator).length > 0 || strongCreatorAnchorTerms(creator, gaming).length >= 2;
+}
+
 function creatorTasteScore(creator: CreatorTaste, globalInterestScores: Map<string, number>) {
   const affinity = Math.min(creator.historyWeight, 16) * 5
     + Math.min(creator.historyIdentities.size, 12) * 2
@@ -924,7 +1001,7 @@ export function buildDiscoveryLanes(
   const directlyRelevant = (signal: DiscoveryTasteSignal) => {
     if (!requestedTopics.length) return true;
     if (overlap(signal.topics, requestedTopics).length) return true;
-    return requestedTopics.includes("gaming") && gamingInterestKeys(`${signal.title} ${signal.metadataText ?? ""} ${signal.channelTitle ?? ""}`).length > 0;
+    return requestedTopics.includes("gaming") && gamingInterestKeys(`${signal.title} ${signal.interestText ?? signal.metadataText ?? ""} ${signal.channelTitle ?? ""}`).length > 0;
   };
   const signalsByCreator = new Map<string, DiscoveryTasteSignal[]>();
   for (const signal of signals) {
@@ -942,10 +1019,11 @@ export function buildDiscoveryLanes(
     || Boolean(signal.channelTitle && relevantCreatorKeys.has(creatorFamilyName(signal.channelTitle))));
   const creators = new Map<string, CreatorTaste>();
   const globalInterestScores = new Map<string, number>();
+  const globalInterestEvidence = new Map<string, { historyIdentities: Set<string>; historyScore: number; liked: number }>();
   const historyRepeats = new Map<string, number>();
 
   for (const signal of relevantSignals) {
-    const interestKeys = requestedTopics.includes("gaming") ? gamingInterestKeys(`${signal.title} ${signal.metadataText ?? ""} ${signal.channelTitle ?? ""}`) : [];
+    const interestKeys = requestedTopics.includes("gaming") ? gamingInterestKeys(`${signal.title} ${signal.interestText ?? signal.metadataText ?? ""} ${signal.channelTitle ?? ""}`) : [];
     const creatorKey = signal.channelTitle ? creatorFamilyName(signal.channelTitle) : "";
     const historyIdentity = signal.origin === "history"
       ? `${creatorKey}:${signal.videoId ?? normalizeCreatorName(signal.title)}`
@@ -957,7 +1035,16 @@ export function buildDiscoveryLanes(
       : signal.origin === "history" ? 4 * historyRecencyWeight(signal.watchedAt, new Date()) * repeatWeight
         : 0.25;
     if (signalWeight <= 0) continue;
-    for (const key of new Set(interestKeys)) globalInterestScores.set(key, (globalInterestScores.get(key) ?? 0) + signalWeight);
+    for (const key of new Set(interestKeys)) {
+      globalInterestScores.set(key, (globalInterestScores.get(key) ?? 0) + signalWeight);
+      const evidence = globalInterestEvidence.get(key) ?? { historyIdentities: new Set<string>(), historyScore: 0, liked: 0 };
+      if (signal.origin === "history" && historyIdentity && !evidence.historyIdentities.has(historyIdentity)) {
+        evidence.historyIdentities.add(historyIdentity);
+        evidence.historyScore += historyRecencyWeight(signal.watchedAt, new Date());
+      }
+      if (signal.origin === "liked") evidence.liked += 1;
+      globalInterestEvidence.set(key, evidence);
+    }
     if (!signal.channelTitle) continue;
     const key = creatorKey;
     if (!key) continue;
@@ -1010,12 +1097,12 @@ export function buildDiscoveryLanes(
   };
 
   const watchedCreators = rankedCreators
-    .filter((creator) => creator.historyIdentities.size >= 2)
+    .filter((creator) => creator.historyIdentities.size >= 2 && hasCreatorDiscoveryEvidence(creator, requestedTopics.includes("gaming")))
     .sort((left, right) => right.historyWeight - left.historyWeight
       || right.historyIdentities.size - left.historyIdentities.size
       || right.likedCount - left.likedCount
       || creatorTasteScore(right, globalInterestScores) - creatorTasteScore(left, globalInterestScores));
-  while (selectedCreators.filter((item) => item.source === "history").length < 4) {
+  while (selectedCreators.filter((item) => item.source === "history").length < 3) {
     const nextWatched = watchedCreators
       .filter((creator) => !creatorAlreadySelected(creator))
       .sort((left, right) => {
@@ -1029,7 +1116,10 @@ export function buildDiscoveryLanes(
   }
 
   const subscribedCreator = rankedCreators
-    .filter((creator) => creator.subscribed && !creatorAlreadySelected(creator))
+    .filter((creator) => creator.subscribed
+      && creator.historyIdentities.size >= 2
+      && hasCreatorDiscoveryEvidence(creator, requestedTopics.includes("gaming"))
+      && !creatorAlreadySelected(creator))
     .sort((left, right) => {
       const value = (creator: CreatorTaste) => creatorTasteScore(creator, globalInterestScores)
         - ([...creator.interestScores.keys()].some((key) => coveredInterests.has(key)) ? 20 : 0);
@@ -1044,23 +1134,26 @@ export function buildDiscoveryLanes(
 
   if (selectedCreators.length < 4) addCreator(watchedCreators.find((creator) => !creatorAlreadySelected(creator)), "history");
 
-  const laneSpecs: Array<{ key: string; label: string; source: DiscoveryLane["source"]; seedChannelTitle: string | null; preferredInterestKeys: string[]; anchorTerms: string[]; queryBase: string; order: DiscoveryLane["order"]; durationVariant: 0 | 1; categoryId?: string }> = selectedCreators.slice(0, 4).map(({ creator, source }) => {
-    const rankedInterestEntries = [...creator.interestScores.entries()].sort((left, right) => right[1] - left[1]);
-    const preferredInterests = rankedInterestEntries
-      .filter(([key]) => {
-        const evidence = creator.interestEvidence.get(key);
-        return Boolean(evidence && (evidence.history >= 4 || evidence.liked >= 6));
-      })
+  const rankedHistoryInterests = [...globalInterestEvidence.entries()]
+    .filter(([, evidence]) => evidence.historyIdentities.size >= 3)
+    .sort((left, right) => right[1].historyScore - left[1].historyScore);
+  const strongestHistoryInterest = rankedHistoryInterests[0]?.[1].historyScore ?? 0;
+  const allowedInterestKeys = [...new Set([
+    ...rankedHistoryInterests
+      .filter(([, evidence]) => evidence.historyScore >= Math.max(3, strongestHistoryInterest * 0.05))
+      .slice(0, 5)
+      .map(([key]) => key),
+    ...[...globalInterestEvidence.entries()].filter(([, evidence]) => evidence.liked >= 2).map(([key]) => key)
+  ])];
+  const laneSpecs: Array<{ key: string; label: string; source: DiscoveryLane["source"]; seedChannelTitle: string | null; preferredInterestKeys: string[]; allowedInterestKeys: string[]; anchorTerms: string[]; queryBase: string; order: DiscoveryLane["order"]; durationVariant: 0 | 1; categoryId?: string }> = selectedCreators.slice(0, 4).map(({ creator, source }) => {
+    const preferredInterests = strongCreatorInterestKeys(creator)
       .slice(0, 2)
-      .map(([key]) => gamingInterest(key))
+      .map((key) => gamingInterest(key))
       .filter((interest): interest is NonNullable<typeof interest> => Boolean(interest));
-    const anchorTerms = [...creator.termScores.entries()]
-      .filter(([, score]) => score >= 6)
-      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
-      .slice(0, 3)
-      .map(([term]) => term);
+    const anchorTerms = strongCreatorAnchorTerms(creator, requestedTopics.includes("gaming"));
+    const creatorAllowedInterestKeys = [...new Set([...allowedInterestKeys, ...preferredInterests.map((interest) => interest.key)])];
     const interestQuery = requestedTopics.includes("gaming") ? preferredInterests.map((interest) => interest.query).join("|") : "";
-    const anchorQuery = anchorTerms.join("|");
+    const anchorQuery = anchorTerms.join(" ");
     const topic = requestedTopics[0] ?? "video";
     return {
       key: `creator:${creator.key}`,
@@ -1068,9 +1161,10 @@ export function buildDiscoveryLanes(
       source,
       seedChannelTitle: creator.title,
       preferredInterestKeys: preferredInterests.map((interest) => interest.key),
+      allowedInterestKeys: creatorAllowedInterestKeys,
       anchorTerms,
       queryBase: interestQuery && anchorQuery
-        ? `${interestQuery}|${anchorTerms.slice(0, 2).join("|")} gameplay`
+        ? `${interestQuery} ${anchorTerms.slice(0, 2).join(" ")} gameplay`
         : interestQuery
           || (anchorQuery ? `${anchorQuery} ${requestedTopics.includes("gaming") ? "gameplay" : topic}` : `"${creator.title}" ${topic}`),
       order: interestQuery ? "viewCount" : "relevance",
@@ -1080,30 +1174,21 @@ export function buildDiscoveryLanes(
   });
 
   if (requestedTopics.includes("gaming")) {
-    laneSpecs.push({
-      key: "explore:gaming-variety",
-      label: "variety gaming",
-      source: "interest",
-      seedChannelTitle: null,
-      preferredInterestKeys: [],
-      anchorTerms: [],
-      queryBase: "funny multiplayer variety games",
-      order: "viewCount",
-      durationVariant: 0,
-      categoryId: "20"
-    });
-    laneSpecs.push({
-      key: "explore:gaming-broad",
-      label: "broader gaming",
-      source: "interest",
-      seedChannelTitle: null,
-      preferredInterestKeys: [],
-      anchorTerms: [],
-      queryBase: "indie games gameplay",
-      order: "viewCount",
-      durationVariant: 1,
-      categoryId: "20"
-    });
+    if (laneSpecs.length < 2) {
+      laneSpecs.push({
+        key: "explore:gaming-variety",
+        label: "variety gaming",
+        source: "interest",
+        seedChannelTitle: null,
+        preferredInterestKeys: [],
+        allowedInterestKeys,
+        anchorTerms: ["multiplayer", "funny"],
+        queryBase: "funny multiplayer gameplay",
+        order: "viewCount",
+        durationVariant: 0,
+        categoryId: "20"
+      });
+    }
   } else {
     const topic = requestedTopics[0] ?? "interesting";
     const topicTerms = topicSearchTerms(topic).slice(0, 5).join("|");
@@ -1114,6 +1199,7 @@ export function buildDiscoveryLanes(
       source: "interest",
       seedChannelTitle: null,
       preferredInterestKeys: [],
+      allowedInterestKeys: [],
       anchorTerms: [],
       queryBase: `${topic} ${intentTerm}`,
       order: "relevance",
@@ -1126,6 +1212,7 @@ export function buildDiscoveryLanes(
       source: "interest",
       seedChannelTitle: null,
       preferredInterestKeys: [],
+      allowedInterestKeys: [],
       anchorTerms: [],
       queryBase: topicTerms,
       order: "viewCount",
@@ -1143,6 +1230,7 @@ export function buildDiscoveryLanes(
       source: "fallback",
       seedChannelTitle: null,
       preferredInterestKeys: [],
+      allowedInterestKeys: [],
       anchorTerms: [],
       queryBase: `${term} ${requestedTopics[0] ?? "video"}`,
       order: "relevance",
@@ -1239,8 +1327,18 @@ export function selectCandidates(scored: ScoredCandidate[], request: Recommendat
   const discoveryLaneCount = activeDiscoveryLaneCount;
   const discoveryLaneCap = discoveryLaneCapacity(request.resultCount, discoveryLaneCount);
   const creatorLaneCap = discoveryLaneCapacity(request.resultCount, 5);
+  const gameCapacity = Math.max(2, Math.ceil(request.resultCount / 4));
   const frequentCreatorTarget = favoriteSubscriptionSlots(request.resultCount, request.source);
   let totalMinutes = 0;
+  const exceedsGameCapacity = (item: ScoredCandidate) => {
+    if (!request.topics.includes("gaming")) return false;
+    const video = item.candidate.video;
+    const keys = gamingInterestKeys(`${video.title} ${(video.tags ?? []).join(" ")}`);
+    return keys.some((key) => selected.filter((picked) => {
+      const pickedVideo = picked.candidate.video;
+      return gamingInterestKeys(`${pickedVideo.title} ${(pickedVideo.tags ?? []).join(" ")}`).includes(key);
+    }).length >= gameCapacity);
+  };
 
   for (const desiredSource of sourceOrder(request)) {
     const sourcePool = pools[desiredSource];
@@ -1270,6 +1368,7 @@ export function selectCandidates(scored: ScoredCandidate[], request: Recommendat
     const next = options.find((item) => {
       if (selected.some((picked) => picked.candidate.video.id === item.candidate.video.id)) return false;
       if (selected.filter((picked) => picked.candidate.video.channelId === item.candidate.video.channelId).length >= 2) return false;
+      if (exceedsGameCapacity(item)) return false;
       if (item.candidate.topicOverride && selected.some((picked) => picked.candidate.topicOverride && picked.candidate.video.channelId === item.candidate.video.channelId)) return false;
       if (item.candidate.discoveryLane) {
         const selectedFromLane = selected.filter((picked) => picked.candidate.discoveryLane?.key === item.candidate.discoveryLane?.key).length;
@@ -1292,6 +1391,11 @@ export function selectCandidates(scored: ScoredCandidate[], request: Recommendat
     if (selected.length >= request.resultCount) break;
     if (selected.some((picked) => picked.candidate.video.id === item.candidate.video.id)) continue;
     if (selected.filter((picked) => picked.candidate.video.channelId === item.candidate.video.channelId).length >= 2) continue;
+    if (exceedsGameCapacity(item)) continue;
+    if (item.candidate.discoveryLane) {
+      const selectedFromLane = selected.filter((picked) => picked.candidate.discoveryLane?.key === item.candidate.discoveryLane?.key).length;
+      if (selectedFromLane >= Math.max(2, discoveryLaneCap + 1)) continue;
+    }
     if (item.candidate.topicOverride && selected.some((picked) => picked.candidate.topicOverride && picked.candidate.video.channelId === item.candidate.video.channelId)) continue;
     if (request.recommendationMode !== "single" && request.timeLimitEnabled && totalMinutes + item.durationMinutes > request.minutes) continue;
     selected.push(item);
@@ -1421,6 +1525,12 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
     const source = candidate.source === VideoSource.SUBSCRIBED ? "subscribed" : "new";
     const video = candidate.video;
     const topics = [...new Set([...effectiveTopics(video), ...(candidate.topicOverride ? ["gaming"] : [])])];
+    const discoveryText = `${video.title} ${video.description ?? ""} ${video.tags.join(" ")} ${video.channel.title}`;
+    const decisiveDiscoveryText = `${video.title} ${video.tags.join(" ")}`;
+    const laneEvidence = candidate.discoveryLane
+      ? personalizedDiscoveryEvidence(candidate.discoveryLane, discoveryText, decisiveDiscoveryText)
+      : { matchingInterests: [], matchingAnchors: [], hasUnsupportedSpecificInterest: false, matched: false };
+    const personalLane = candidate.discoveryLane ? isPersonalDiscoveryLane(candidate.discoveryLane) : false;
     const freshness = freshnessForVideo(video.publishedAt, request.maxAgeMonths);
     const history = profile.useWatchHistory ? historyAffinity(video, topics, historyTaste, historyAnchors) : { score: 0, matched: false, anchor: null };
     if (excludedVideoIds.has(video.id)) return [];
@@ -1436,16 +1546,16 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
     if (hasExcludedTopicConflict(video, topics, profile.excludedTopics, request.topics)) return [];
     if (request.audioFriendly && !video.audioFriendly) return [];
     if (source === "new" && currentDiscoveryLanes.length > 0 && !candidate.discoveryLane) return [];
+    if (source === "new" && requestedTopics.includes("gaming") && personalLane && !laneEvidence.matched) return [];
 
     const topicMatches = overlap(topics, requestedTopics);
     const intentMatch = video.intents.includes(request.intent);
     const intentScore = intentMatch ? 15 : 0;
     const topicScore = topicMatches.length ? 20 : 0;
-    const discoveryText = `${video.title} ${video.description ?? ""} ${video.tags.join(" ")} ${video.channel.title}`;
     const discoveryAffinity = candidate.discoveryLane
       ? discoveryPreferenceScore(candidate.discoveryLane.source, candidate.discoveryLane.preferredInterestKeys, candidate.discoveryLane.anchorTerms, discoveryText)
       : 0;
-    const historyLaneScore = profile.useWatchHistory && candidate.discoveryLane?.source === "history"
+    const historyLaneScore = profile.useWatchHistory && candidate.discoveryLane?.source === "history" && laneEvidence.matched
       ? Math.min(35, 26 + Math.min(9, discoveryPreferenceScore("history", candidate.discoveryLane.preferredInterestKeys, candidate.discoveryLane.anchorTerms, discoveryText) - 18))
       : 0;
     const historyScore = profile.useWatchHistory ? Math.max(history.score, historyLaneScore) : 0;
@@ -1463,14 +1573,12 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
     const match = Math.max(0, Math.min(100, Math.round(intentScore + topicScore + historyScore + affinityScore + durationScore + popularity - feedbackPenalty - freshness.penalty)));
     const sourceSignal = source === "subscribed" ? "From your subscriptions" : "New creator discovery";
     const popularitySignal = source === "new" ? "Popular on YouTube" : null;
-    const laneInterestMatches = candidate.discoveryLane
-      ? gamingInterestKeys(discoveryText).filter((key) => candidate.discoveryLane!.preferredInterestKeys.includes(key))
-      : [];
+    const laneInterestMatches = laneEvidence.matchingInterests;
     const laneSignal = candidate.discoveryLane
       ? candidate.discoveryLane.source === "history" ? laneInterestMatches.length
         ? `A familiar game from your ${candidate.discoveryLane.label} viewing`
-        : `Inspired by videos you watch from ${candidate.discoveryLane.label}`
-        : candidate.discoveryLane.source === "subscription" ? `Inspired by your subscription to ${candidate.discoveryLane.label}`
+        : laneEvidence.matched ? `Similar to videos you watch from ${candidate.discoveryLane.label}` : null
+        : candidate.discoveryLane.source === "subscription" ? laneEvidence.matched ? `Similar to your subscription to ${candidate.discoveryLane.label}` : null
           : candidate.discoveryLane.source === "liked" ? `Inspired by videos you liked from ${candidate.discoveryLane.label}`
             : `Broadens your ${candidate.discoveryLane.label} options`
       : null;

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { VideoSource } from "../generated/prisma/enums.js";
-import { buildCreatorAffinities, buildDiscoveryLanes, buildHistoryTasteProfile, controlledGamingOverride, creatorFamilyName, discoveryLaneCapacity, discoveryPreferenceScore, discoverySearchQuery, enrichWatchHistorySignals, favoriteSubscriptionSlots, feedbackDecay, feedbackPenaltyForVideo, fitTier, freshnessForVideo, freshnessReason, gamingInterestKeys, hasExcludedTopicConflict, hasStrongTopicEvidence, historyAffinity, historyTermsForSearch, isLowTrustDiscoveryTitle, isPopularNewCreator, normalizeRecommendationRequest, normalizeSessionTopics, recommendationSearchOrder, searchCacheKey, searchDurationForFormats, selectCandidates, subscriptionCandidateExpiration, topicCategoryIdForSearch, topicCategoryMismatch, youtubeSearchParameters } from "./recommendations.js";
+import { buildCreatorAffinities, buildDiscoveryLanes, buildHistoryTasteProfile, controlledGamingOverride, creatorFamilyName, discoveryLaneCapacity, discoveryPreferenceScore, discoverySearchQuery, enrichWatchHistorySignals, favoriteSubscriptionSlots, feedbackDecay, feedbackPenaltyForVideo, fitTier, freshnessForVideo, freshnessReason, gamingInterestKeys, hasExcludedTopicConflict, hasStrongTopicEvidence, historyAffinity, historyTermsForSearch, isLowTrustDiscoveryTitle, isPopularNewCreator, normalizeRecommendationRequest, normalizeSessionTopics, personalizedDiscoveryEvidence, recommendationSearchOrder, searchCacheKey, searchDurationForFormats, selectCandidates, subscriptionCandidateExpiration, topicCategoryIdForSearch, topicCategoryMismatch, youtubeSearchParameters } from "./recommendations.js";
 
 const now = new Date("2026-09-20T12:00:00.000Z");
 
@@ -272,10 +272,11 @@ describe("recommendation freshness", () => {
 
   it("builds creator-led discovery lanes from history and subscriptions", () => {
     const history = [
-      ...Array.from({ length: 7 }, (_, index) => ({ title: `Variety challenge ${index}`, channelTitle: "Variety Crew", topics: ["gaming"], origin: "history" as const })),
-      ...Array.from({ length: 6 }, (_, index) => ({ title: `Minecraft trap ${index}`, channelTitle: "Block Builder", topics: ["gaming"], origin: "history" as const })),
-      ...Array.from({ length: 5 }, (_, index) => ({ title: `CS2 clutch ${index}`, channelTitle: "Tactical Player", topics: ["gaming"], origin: "history" as const })),
-      ...Array.from({ length: 4 }, (_, index) => ({ title: `Bloons BTD6 challenge ${index}`, channelTitle: "Tower Expert", topics: ["gaming"], origin: "history" as const }))
+      ...Array.from({ length: 7 }, (_, index) => ({ title: `Funny multiplayer challenge ${index}`, channelTitle: "Variety Crew", topics: ["gaming"], watchedAt: now, origin: "history" as const })),
+      ...Array.from({ length: 6 }, (_, index) => ({ title: `Minecraft survival challenge ${index}`, channelTitle: "Block Builder", topics: ["gaming"], watchedAt: now, origin: "history" as const })),
+      ...Array.from({ length: 5 }, (_, index) => ({ title: `CS2 competitive ranked ${index}`, channelTitle: "Tactical Player", topics: ["gaming"], watchedAt: now, origin: "history" as const })),
+      ...Array.from({ length: 4 }, (_, index) => ({ title: `Bloons BTD6 strategy challenge ${index}`, channelTitle: "Tower Expert", topics: ["gaming"], watchedAt: now, origin: "history" as const })),
+      ...Array.from({ length: 3 }, (_, index) => ({ title: `Brawl Stars ranked strategy ${index}`, channelTitle: "Arena Guide", topics: ["gaming"], watchedAt: now, origin: "history" as const }))
     ];
     const subscriptions = Array.from({ length: 4 }, (_, index) => ({
       title: `Brawl Stars ranked ${index}`,
@@ -284,10 +285,11 @@ describe("recommendation freshness", () => {
       origin: "subscription" as const
     }));
     const lanes = buildDiscoveryLanes([...history, ...subscriptions], ["gaming"], "relax", new Set(["arenaguide"]));
-    expect(lanes).toHaveLength(5);
-    expect(lanes.map((lane) => lane.label)).toEqual(expect.arrayContaining(["Variety Crew", "Block Builder", "Tactical Player", "Tower Expert", "variety gaming"]));
-    expect(new Set(lanes.map((lane) => lane.key)).size).toBe(5);
-    expect(lanes.filter((lane) => lane.source === "history")).toHaveLength(4);
+    expect(lanes).toHaveLength(4);
+    expect(lanes.map((lane) => lane.label)).toEqual(expect.arrayContaining(["Variety Crew", "Block Builder", "Tactical Player", "Arena Guide"]));
+    expect(new Set(lanes.map((lane) => lane.key)).size).toBe(4);
+    expect(lanes.filter((lane) => lane.source === "history")).toHaveLength(3);
+    expect(lanes.filter((lane) => lane.source === "subscription")).toHaveLength(1);
     expect(lanes.find((lane) => lane.label === "Variety Crew")?.query).toContain("challenge");
     expect(lanes.find((lane) => lane.label === "Variety Crew")?.query).not.toContain("\"Variety Crew\"");
   });
@@ -302,34 +304,82 @@ describe("recommendation freshness", () => {
       .toBeGreaterThan(profile.creatorWeights.get(creatorFamilyName("Repeat Channel"))!.weight);
   });
 
-  it("requires watched or liked evidence before a game becomes a preference", () => {
+  it("requires repeated watched or liked evidence before a game becomes a preference", () => {
     const signals = [
-      ...Array.from({ length: 4 }, (_, index) => ({
+      ...Array.from({ length: 7 }, (_, index) => ({
         title: `Ranked match ${index}`,
         channelTitle: "Mobile Tactics",
         topics: ["gaming"],
         origin: "history" as const,
+        watchedAt: now,
         metadataText: "#clashroyale"
       })),
-      {
-        title: "A Brawl Stars match I liked",
+      ...Array.from({ length: 2 }, (_, index) => ({
+        title: `A Brawl Stars match I liked ${index}`,
         channelTitle: "Mobile Tactics",
         topics: ["gaming"],
         origin: "liked" as const,
         metadataText: "#brawlstars"
-      },
-      ...Array.from({ length: 8 }, (_, index) => ({
-        title: `Unwatched Brawl upload ${index}`,
+      })),
+      ...Array.from({ length: 4 }, (_, index) => ({
+        title: `Unwatched Roblox upload ${index}`,
         channelTitle: "Mobile Tactics",
         topics: ["gaming"],
         origin: "subscription" as const,
-        metadataText: "#brawlstars"
+        metadataText: "#roblox"
       }))
     ];
     const lane = buildDiscoveryLanes(signals, ["gaming"], "relax", new Set(["mobiletactics"]))[0];
     expect(lane?.preferredInterestKeys).toEqual(expect.arrayContaining(["clash-royale", "brawl-stars"]));
+    expect(lane?.preferredInterestKeys).not.toContain("roblox");
     expect(lane?.query).toContain("clash royale");
     expect(lane?.query).toContain("brawl stars");
+  });
+
+  it("does not turn a single watched game into a discovery query", () => {
+    const signals = [
+      ...Array.from({ length: 10 }, (_, index) => ({
+        videoId: `variety-${index}`,
+        title: `Funny multiplayer challenge ${index}`,
+        channelTitle: "Variety Player",
+        topics: ["gaming"],
+        origin: "history" as const
+      })),
+      {
+        videoId: "one-gta-video",
+        title: "One GTA session with friends",
+        channelTitle: "Variety Player",
+        topics: ["gaming"],
+        origin: "history" as const
+      }
+    ];
+    const lane = buildDiscoveryLanes(signals, ["gaming"], "entertain")[0];
+    expect(lane?.query.toLowerCase()).not.toContain("gta");
+    expect(lane?.allowedInterestKeys).not.toContain("gta");
+    expect(personalizedDiscoveryEvidence(lane!, "GTA funny multiplayer gameplay")).toMatchObject({
+      hasUnsupportedSpecificInterest: true,
+      matched: false
+    });
+  });
+
+  it("requires an allowed game or two shared style signals for a personal discovery result", () => {
+    const lane = {
+      preferredInterestKeys: ["minecraft"],
+      allowedInterestKeys: ["minecraft"],
+      anchorTerms: ["funny", "multiplayer"]
+    };
+    expect(personalizedDiscoveryEvidence(lane, "A Minecraft survival video").matched).toBe(true);
+    expect(personalizedDiscoveryEvidence(lane, "A funny multiplayer party game").matched).toBe(true);
+    expect(personalizedDiscoveryEvidence(lane, "A funny solo playthrough").matched).toBe(false);
+    expect(personalizedDiscoveryEvidence(lane, "A funny multiplayer GTA video")).toMatchObject({
+      hasUnsupportedSpecificInterest: true,
+      matched: false
+    });
+    expect(personalizedDiscoveryEvidence(
+      { preferredInterestKeys: ["counter-strike"], allowedInterestKeys: ["counter-strike"], anchorTerms: [] },
+      "Geometry Dash challenge. The description casually mentions CS2 among other games.",
+      "Geometry Dash challenge"
+    ).matched).toBe(false);
   });
 
   it("uses recognized games as ranking boosts instead of required filters", () => {
@@ -580,6 +630,43 @@ describe("recommendation freshness", () => {
       antiClickbait: true
     });
     expect(selected).toHaveLength(10);
+  });
+
+  it("does not let one recognized game dominate a ten-result discovery set", () => {
+    const candidates = [
+      ...Array.from({ length: 6 }, (_, index) => ({ id: `gta-${index}`, title: `GTA Online challenge ${index}` })),
+      ...Array.from({ length: 5 }, (_, index) => ({ id: `minecraft-${index}`, title: `Minecraft survival ${index}` })),
+      ...Array.from({ length: 5 }, (_, index) => ({ id: `variety-${index}`, title: `Co-op party game ${index}` }))
+    ].map((item, index) => ({
+      candidate: {
+        source: VideoSource.NEW,
+        video: { id: item.id, channelId: `channel-${index}`, title: item.title, description: "", tags: [], topics: ["gaming"] },
+        topicOverride: false
+      },
+      match: 100 - index,
+      reason: "Test",
+      signals: ["Test"],
+      durationMinutes: 10,
+      frequentCreator: false
+    }));
+    const selected = selectCandidates(candidates as never, {
+      minutes: 60,
+      timeLimitEnabled: false,
+      recommendationMode: "single",
+      sortBy: "best_match",
+      resultCount: 10,
+      intent: "entertain",
+      source: "new",
+      topics: ["gaming"],
+      formats: ["standard"],
+      languages: ["en"],
+      maxAgeMonths: 12,
+      audioFriendly: false,
+      antiClickbait: true
+    });
+    expect(selected).toHaveLength(10);
+    expect(selected.filter((item) => item.candidate.video.id.startsWith("gta-"))).toHaveLength(3);
+    expect(selected.filter((item) => item.candidate.video.id.startsWith("minecraft-"))).toHaveLength(3);
   });
 
   it("filters recurring low-trust discovery patterns when anti-clickbait is enabled", () => {
