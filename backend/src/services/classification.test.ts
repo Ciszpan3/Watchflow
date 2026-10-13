@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyLanguage, classifyTopicsFromText, classifyVideo, topicSearchTerms } from "./classification.js";
+import { classifyLanguage, classifyStoredVideoTopics, classifyTopicsFromText, classifyVideo, topicSearchTerms } from "./classification.js";
 
 describe("YouTube video classification", () => {
   it("keeps declared languages and detects obvious unsupported-language fallbacks", () => {
@@ -62,5 +62,15 @@ describe("YouTube video classification", () => {
   it("uses YouTube category metadata for gaming and health", () => {
     expect(classifyVideo({ snippet: { title: "Ranked match highlights", categoryId: "20" }, contentDetails: { duration: "PT12M" } }).topics).toContain("gaming");
     expect(classifyVideo({ snippet: { title: "12 week progress update", categoryId: "17" }, contentDetails: { duration: "PT12M" } }).topics).toContain("health");
+  });
+
+  it("reuses stored metadata when enriching imported history", () => {
+    expect(classifyStoredVideoTopics({
+      title: "An opaque title",
+      description: "Playing a co-op adventure",
+      tags: ["multiplayer"],
+      categoryId: "20",
+      channelTitle: "Variety Crew"
+    })).toContain("gaming");
   });
 });

@@ -7,7 +7,7 @@ import { requestViewerSync } from "../services/viewerSync.js";
 import { serializeFeedback } from "../services/feedback.js";
 import { isProfileInput, isRecommendationRequest, isWatchHistoryImportItem, type WatchHistoryImportItem } from "../viewer/contracts.js";
 import { getOrCreateProfile, profileCreateData, serializeProfile } from "../viewer/profile.js";
-import { classifyTopicsFromText } from "../services/classification.js";
+import { classifyStoredVideoTopics } from "../services/classification.js";
 
 export const viewerRouter = Router();
 viewerRouter.use(optionalAuth, requireAuth);
@@ -79,6 +79,11 @@ viewerRouter.post("/history/import", async (req, res, next) => {
         return true;
       });
     const userId = (req as AuthenticatedRequest).authUser.id;
+    const importedVideoIds = [...new Set(items.flatMap((item) => item.videoId ? [item.videoId] : []))];
+    const knownVideos = importedVideoIds.length
+      ? await db.video.findMany({ where: { id: { in: importedVideoIds } }, include: { channel: true } })
+      : [];
+    const knownVideosById = new Map(knownVideos.map((video) => [video.id, video]));
     await db.$transaction([
       db.watchHistoryItem.deleteMany({ where: { userId } }),
       db.watchHistoryItem.createMany({ data: items.map((item) => ({
@@ -87,7 +92,14 @@ viewerRouter.post("/history/import", async (req, res, next) => {
         title: item.title,
         channelTitle: item.channelTitle,
         watchedAt: item.watchedAt,
-        topics: classifyTopicsFromText(`${item.title} ${item.channelTitle ?? ""}`)
+        topics: classifyStoredVideoTopics({
+          title: item.title,
+          channelTitle: item.channelTitle,
+          ...(item.videoId && knownVideosById.get(item.videoId) ? {
+            ...knownVideosById.get(item.videoId),
+            channelDescription: knownVideosById.get(item.videoId)?.channel.description
+          } : {})
+        })
       })) })
     ]);
     res.json({ count: items.length, importedAt: new Date().toISOString() });

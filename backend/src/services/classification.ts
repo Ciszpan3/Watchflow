@@ -21,6 +21,12 @@ const topicKeywords: Record<string, string[]> = {
   diy: ["diy", "build", "woodworking", "repair", "tools", "craft"]
 };
 
+const categoryTopics: Record<string, string[]> = {
+  "17": ["health"],
+  "20": ["gaming"],
+  "10": ["music"]
+};
+
 export function classifyTopicsFromText(value: string) {
   const text = value.toLowerCase();
   return Object.entries(topicKeywords)
@@ -30,6 +36,29 @@ export function classifyTopicsFromText(value: string) {
 
 export function topicSearchTerms(topic: string) {
   return topicKeywords[topic] ?? [topic];
+}
+
+export function classifyStoredVideoTopics(video: {
+  title: string;
+  description?: string | null;
+  tags?: string[];
+  categoryId?: string | null;
+  channelTitle?: string | null;
+  channelDescription?: string | null;
+  topics?: string[];
+}) {
+  const text = [
+    video.title,
+    video.description ?? "",
+    ...(video.tags ?? []),
+    video.channelTitle ?? "",
+    video.channelDescription ?? ""
+  ].join(" ");
+  return [...new Set([
+    ...(video.topics ?? []),
+    ...classifyTopicsFromText(text),
+    ...(video.categoryId ? categoryTopics[video.categoryId] ?? [] : [])
+  ])];
 }
 
 function containsKeyword(text: string, keyword: string) {
@@ -60,11 +89,6 @@ export function classifyVideo(item: youtube_v3.Schema$Video) {
   const live = item.snippet?.liveBroadcastContent && item.snippet.liveBroadcastContent !== "none";
   const podcastWords = ["podcast", "interview", "conversation", "talk", "rozmowa", "wywiad"];
   const format = live ? "live" : durationSeconds <= 180 ? "short" : durationSeconds >= 1200 && podcastWords.some((word) => text.includes(word)) ? "podcast" : "standard";
-  const categoryTopics: Record<string, string[]> = {
-    "17": ["health"],
-    "20": ["gaming"],
-    "10": ["music"]
-  };
   const topics = [...new Set([
     ...classifyTopicsFromText(text),
     ...(item.snippet?.categoryId ? categoryTopics[item.snippet.categoryId] ?? [] : [])

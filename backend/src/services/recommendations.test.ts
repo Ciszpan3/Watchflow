@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { VideoSource } from "../generated/prisma/enums.js";
-import { buildCreatorAffinities, buildDiscoveryLanes, controlledGamingOverride, creatorFamilyName, discoveryLaneCapacity, discoveryPreferenceScore, discoverySearchQuery, favoriteSubscriptionSlots, feedbackDecay, feedbackPenaltyForVideo, fitTier, freshnessForVideo, freshnessReason, gamingInterestKeys, hasStrongTopicEvidence, historyAffinity, historyTermsForSearch, isLowTrustDiscoveryTitle, isPopularNewCreator, normalizeSessionTopics, searchCacheKey, searchDurationForFormats, selectCandidates, subscriptionCandidateExpiration, topicCategoryMismatch, youtubeSearchParameters } from "./recommendations.js";
+import { buildCreatorAffinities, buildDiscoveryLanes, buildHistoryTasteProfile, controlledGamingOverride, creatorFamilyName, discoveryLaneCapacity, discoveryPreferenceScore, discoverySearchQuery, enrichWatchHistorySignals, favoriteSubscriptionSlots, feedbackDecay, feedbackPenaltyForVideo, fitTier, freshnessForVideo, freshnessReason, gamingInterestKeys, hasStrongTopicEvidence, historyAffinity, historyTermsForSearch, isLowTrustDiscoveryTitle, isPopularNewCreator, normalizeSessionTopics, searchCacheKey, searchDurationForFormats, selectCandidates, subscriptionCandidateExpiration, topicCategoryMismatch, youtubeSearchParameters } from "./recommendations.js";
 
 const now = new Date("2026-09-20T12:00:00.000Z");
 
@@ -95,7 +95,8 @@ describe("recommendation freshness", () => {
     ], ["gaming"]);
     expect(terms).toContain("minecraft");
     expect(terms).not.toEqual(expect.arrayContaining(["obejrzano", "watched", "gaming", "game", "video", "episode"]));
-    expect(discoverySearchQuery(["gaming"], terms, "relax", 0)).toBe("minecraft gaming");
+    expect(discoverySearchQuery(["gaming"], terms, "relax", 0)).toContain("minecraft");
+    expect(discoverySearchQuery(["gaming"], terms, "relax", 0)).toContain("gaming");
     expect(discoverySearchQuery(["gaming"], ["minecraft", "zelda"], "relax", 0)).toBe("minecraft|zelda gaming");
     expect(discoverySearchQuery(["gaming"], ["minecraft", "zelda"], "relax", 1)).toBe("minecraft peaceful gaming");
   });
@@ -120,6 +121,49 @@ describe("recommendation freshness", () => {
     expect(historyAffinity({ ...video, title: "Minecraft survival ideas" }, ["gaming"], [
       { title: "Minecraft survival building", channelTitle: "Block Lab", topics: ["gaming"] }
     ], ["minecraft"])).toMatchObject({ matched: true, anchor: "minecraft" });
+  });
+
+  it("makes a frequently watched creator stronger than an unrelated topic-only candidate", () => {
+    const recent = new Date(now.getTime() - 10 * 86_400_000);
+    const rows = [
+      ...Array.from({ length: 12 }, (_, index) => ({
+        videoId: `favorite-${index}`,
+        title: `Different co-op adventure ${index}`,
+        channelTitle: "Favorite Crew",
+        topics: ["gaming"],
+        watchedAt: recent
+      })),
+      { videoId: "other", title: "A strategy game", channelTitle: "Other Channel", topics: ["gaming"], watchedAt: recent }
+    ];
+    const profile = buildHistoryTasteProfile(rows);
+    const favorite = historyAffinity({
+      title: "A brand new upload",
+      description: "",
+      tags: [],
+      channel: { title: "Favorite Crew" }
+    } as never, ["gaming"], profile);
+    const unrelated = historyAffinity({
+      title: "A generic gaming upload",
+      description: "",
+      tags: [],
+      channel: { title: "Unknown Creator" }
+    } as never, ["gaming"], profile);
+    expect(favorite.score).toBeGreaterThanOrEqual(30);
+    expect(favorite.score).toBeGreaterThan(unrelated.score);
+    expect(unrelated.matched).toBe(false);
+  });
+
+  it("enriches sparse imported history from known video and creator metadata", () => {
+    const corpus = [
+      { id: "known", channelId: "channel", title: "Co-op night", description: "", tags: [], categoryId: "20", topics: [], channel: { title: "Variety Crew" } },
+      { id: "other", channelId: "channel", title: "Another upload", description: "Multiplayer gameplay", tags: [], categoryId: "20", topics: [], channel: { title: "Variety Crew" } }
+    ];
+    const enriched = enrichWatchHistorySignals([
+      { videoId: "known", title: "Co-op night", channelTitle: "Variety Crew", topics: [] },
+      { videoId: "missing", title: "An oddly named upload", channelTitle: "Variety Crew Plus", topics: [] }
+    ], corpus as never);
+    expect(enriched[0].topics).toContain("gaming");
+    expect(enriched[1].topics).toContain("gaming");
   });
 
   it("rejects accidental tech and space words without semantic evidence", () => {
@@ -152,10 +196,21 @@ describe("recommendation freshness", () => {
     }));
     const lanes = buildDiscoveryLanes([...history, ...subscriptions], ["gaming"], "relax", new Set(["arenaguide"]));
     expect(lanes).toHaveLength(5);
-    expect(lanes.map((lane) => lane.label)).toEqual(expect.arrayContaining(["Variety Crew", "Block Builder", "Arena Guide", "variety gaming", "broader gaming"]));
+    expect(lanes.map((lane) => lane.label)).toEqual(expect.arrayContaining(["Variety Crew", "Block Builder", "Tactical Player", "Tower Expert", "variety gaming"]));
     expect(new Set(lanes.map((lane) => lane.key)).size).toBe(5);
-    expect(lanes.find((lane) => lane.label === "Arena Guide")?.source).toBe("subscription");
-    expect(lanes.find((lane) => lane.label === "Arena Guide")?.preferredInterestKeys).toEqual([]);
+    expect(lanes.filter((lane) => lane.source === "history")).toHaveLength(4);
+    expect(lanes.find((lane) => lane.label === "Variety Crew")?.query).toContain("challenge");
+    expect(lanes.find((lane) => lane.label === "Variety Crew")?.query).not.toContain("\"Variety Crew\"");
+  });
+
+  it("does not let repeated plays of one video outweigh several unique recent videos", () => {
+    const recent = new Date(now.getTime() - 5 * 86_400_000);
+    const profile = buildHistoryTasteProfile([
+      ...Array.from({ length: 20 }, () => ({ videoId: "repeat", title: "Same upload", channelTitle: "Repeat Channel", topics: ["gaming"], watchedAt: recent })),
+      ...Array.from({ length: 4 }, (_, index) => ({ videoId: `unique-${index}`, title: `Different upload ${index}`, channelTitle: "Variety Channel", topics: ["gaming"], watchedAt: recent }))
+    ]);
+    expect(profile.creatorWeights.get(creatorFamilyName("Variety Channel"))!.weight)
+      .toBeGreaterThan(profile.creatorWeights.get(creatorFamilyName("Repeat Channel"))!.weight);
   });
 
   it("requires watched or liked evidence before a game becomes a preference", () => {
@@ -184,7 +239,8 @@ describe("recommendation freshness", () => {
     ];
     const lane = buildDiscoveryLanes(signals, ["gaming"], "relax", new Set(["mobiletactics"]))[0];
     expect(lane?.preferredInterestKeys).toEqual(expect.arrayContaining(["clash-royale", "brawl-stars"]));
-    expect(lane?.query).toContain("clash royale|brawl stars");
+    expect(lane?.query).toContain("clash royale");
+    expect(lane?.query).toContain("brawl stars");
   });
 
   it("uses recognized games as ranking boosts instead of required filters", () => {
@@ -205,14 +261,14 @@ describe("recommendation freshness", () => {
     expect(creatorFamilyName("JudeHigh")).toBe(creatorFamilyName("JudeLow"));
   });
 
-  it("reserves about half of subscription results for frequently watched creators", () => {
-    expect(favoriteSubscriptionSlots(10, "subscribed")).toBe(5);
-    expect(favoriteSubscriptionSlots(5, "subscribed")).toBe(3);
-    expect(favoriteSubscriptionSlots(10, "mixed")).toBe(3);
+  it("reserves most subscription results for frequently watched creators", () => {
+    expect(favoriteSubscriptionSlots(10, "subscribed")).toBe(7);
+    expect(favoriteSubscriptionSlots(5, "subscribed")).toBe(4);
+    expect(favoriteSubscriptionSlots(10, "mixed")).toBe(4);
     expect(favoriteSubscriptionSlots(10, "new")).toBe(0);
   });
 
-  it("actually fills about half of a ten-result subscription set with favorite creators", () => {
+  it("fills as much of the history-first subscription target as available", () => {
     const scored = [
       ...Array.from({ length: 6 }, (_, index) => ({ id: `favorite-${index}`, frequent: true, score: 50 })),
       ...Array.from({ length: 10 }, (_, index) => ({ id: `regular-${index}`, frequent: false, score: 100 - index }))
@@ -243,7 +299,7 @@ describe("recommendation freshness", () => {
       antiClickbait: true
     });
     expect(selected).toHaveLength(10);
-    expect(selected.filter((item) => item.frequentCreator)).toHaveLength(5);
+    expect(selected.filter((item) => item.frequentCreator)).toHaveLength(6);
     expect(Math.max(...[...new Set(selected.map((item) => item.candidate.video.channelId))].map((channelId) => selected.filter((item) => item.candidate.video.channelId === channelId).length))).toBeLessThanOrEqual(2);
   });
 
