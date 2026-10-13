@@ -32,6 +32,7 @@ const request: RecommendationSessionRequest = {
   minutes: 30,
   timeLimitEnabled: false,
   recommendationMode: "single",
+  sortBy: "best_match",
   resultCount: 5,
   intent: "relax",
   source: "mixed",
@@ -92,6 +93,12 @@ describe("viewer profile adapter", () => {
     expect(normalizeSessionTopics(["gaming", "technology", "science"])).toEqual(["science"]);
     window.localStorage.setItem(VIEWER_SESSION_DRAFT_KEY, JSON.stringify({ request: { ...request, topics: ["gaming", "technology"] } }));
     await expect(getSessionDraft("demo")).resolves.toMatchObject({ request: { topics: ["technology"] } });
+  });
+
+  it("normalizes older saved sessions to best-match ordering", async () => {
+    const { sortBy: _sortBy, ...legacyRequest } = request;
+    window.localStorage.setItem(VIEWER_SESSION_DRAFT_KEY, JSON.stringify({ request: legacyRequest }));
+    await expect(getSessionDraft("demo")).resolves.toMatchObject({ request: { sortBy: "best_match" } });
   });
 
   it("keeps demo signals local without inventing imported counts", async () => {

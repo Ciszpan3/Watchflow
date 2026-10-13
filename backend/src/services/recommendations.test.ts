@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { VideoSource } from "../generated/prisma/enums.js";
-import { buildCreatorAffinities, buildDiscoveryLanes, buildHistoryTasteProfile, controlledGamingOverride, creatorFamilyName, discoveryLaneCapacity, discoveryPreferenceScore, discoverySearchQuery, enrichWatchHistorySignals, favoriteSubscriptionSlots, feedbackDecay, feedbackPenaltyForVideo, fitTier, freshnessForVideo, freshnessReason, gamingInterestKeys, hasStrongTopicEvidence, historyAffinity, historyTermsForSearch, isLowTrustDiscoveryTitle, isPopularNewCreator, normalizeSessionTopics, searchCacheKey, searchDurationForFormats, selectCandidates, subscriptionCandidateExpiration, topicCategoryMismatch, youtubeSearchParameters } from "./recommendations.js";
+import { buildCreatorAffinities, buildDiscoveryLanes, buildHistoryTasteProfile, controlledGamingOverride, creatorFamilyName, discoveryLaneCapacity, discoveryPreferenceScore, discoverySearchQuery, enrichWatchHistorySignals, favoriteSubscriptionSlots, feedbackDecay, feedbackPenaltyForVideo, fitTier, freshnessForVideo, freshnessReason, gamingInterestKeys, hasStrongTopicEvidence, historyAffinity, historyTermsForSearch, isLowTrustDiscoveryTitle, isPopularNewCreator, normalizeSessionTopics, recommendationSearchOrder, searchCacheKey, searchDurationForFormats, selectCandidates, subscriptionCandidateExpiration, topicCategoryMismatch, youtubeSearchParameters } from "./recommendations.js";
 
 const now = new Date("2026-09-20T12:00:00.000Z");
 
@@ -21,6 +21,7 @@ describe("recommendation freshness", () => {
     expect(youtubeSearchParameters("gaming", "en", 3, now, "20")).toMatchObject({ videoCategoryId: "20" });
     expect(youtubeSearchParameters("gaming", "en", 3, now, "20", "medium")).toMatchObject({ videoDuration: "medium" });
     expect(youtubeSearchParameters("gaming", "en", 3, now, "20", "medium", "viewCount")).toMatchObject({ order: "viewCount" });
+    expect(youtubeSearchParameters("gaming", "en", 3, now, "20", "medium", "date")).toMatchObject({ order: "date" });
     expect(youtubeSearchParameters("science", "en", 3, now)).not.toHaveProperty("videoCategoryId");
     expect(youtubeSearchParameters("science learn", "en", null, now)).not.toHaveProperty("publishedAfter");
   });
@@ -41,6 +42,12 @@ describe("recommendation freshness", () => {
     expect(current).not.toBe(searchCacheKey("science", "en", "standard", 12, "20"));
     expect(current).not.toBe(searchCacheKey("science", "en", "standard", 12, undefined, "long"));
     expect(current).not.toBe(searchCacheKey("science", "en", "standard", 12, undefined, undefined, "viewCount"));
+    expect(current).not.toBe(searchCacheKey("science", "en", "standard", 12, undefined, undefined, "date"));
+  });
+
+  it("uses YouTube date ordering only for the newest recommendation mode", () => {
+    expect(recommendationSearchOrder("newest", "viewCount")).toBe("date");
+    expect(recommendationSearchOrder("best_match", "viewCount")).toBe("viewCount");
   });
 
   it.each([1, 3, 6, 12, 24] as const)("enforces the %s month limit", (months) => {
@@ -288,6 +295,7 @@ describe("recommendation freshness", () => {
       minutes: 60,
       timeLimitEnabled: false,
       recommendationMode: "single",
+      sortBy: "best_match",
       resultCount: 10,
       intent: "entertain",
       source: "subscribed",
@@ -301,6 +309,77 @@ describe("recommendation freshness", () => {
     expect(selected).toHaveLength(10);
     expect(selected.filter((item) => item.frequentCreator)).toHaveLength(6);
     expect(Math.max(...[...new Set(selected.map((item) => item.candidate.video.channelId))].map((channelId) => selected.filter((item) => item.candidate.video.channelId === channelId).length))).toBeLessThanOrEqual(2);
+  });
+
+  it("orders matching candidates by publication date in newest mode", () => {
+    const candidate = (id: string, publishedAt: string, match: number) => ({
+      candidate: {
+        source: VideoSource.SUBSCRIBED,
+        video: { id, channelId: `channel-${id}`, title: id, topics: ["science"], publishedAt: new Date(publishedAt) }
+      },
+      match,
+      reason: "Test",
+      signals: ["Test"],
+      durationMinutes: 10,
+      frequentCreator: false
+    });
+    const selected = selectCandidates([
+      candidate("older-better-match", "2026-08-01T00:00:00.000Z", 95),
+      candidate("newer-match", "2026-09-15T00:00:00.000Z", 55)
+    ] as never, {
+      minutes: 60,
+      timeLimitEnabled: false,
+      recommendationMode: "single",
+      sortBy: "newest",
+      resultCount: 3,
+      intent: "learn",
+      source: "subscribed",
+      topics: ["science"],
+      formats: ["standard"],
+      languages: ["en"],
+      maxAgeMonths: 12,
+      audioFriendly: false,
+      antiClickbait: true
+    });
+    expect(selected.map((item) => item.candidate.video.id)).toEqual(["newer-match", "older-better-match"]);
+  });
+
+  it("orders the final mixed-source set globally by publication date", () => {
+    const candidate = (id: string, source: VideoSource, publishedAt: string) => ({
+      candidate: {
+        source,
+        video: { id, channelId: `channel-${id}`, title: id, topics: ["science"], publishedAt: new Date(publishedAt) }
+      },
+      match: 70,
+      reason: "Test",
+      signals: ["Test"],
+      durationMinutes: 10,
+      frequentCreator: false
+    });
+    const selected = selectCandidates([
+      candidate("subscribed-week-old", VideoSource.SUBSCRIBED, "2026-09-13T00:00:00.000Z"),
+      candidate("new-day-old", VideoSource.NEW, "2026-09-19T00:00:00.000Z"),
+      candidate("subscribed-month-old", VideoSource.SUBSCRIBED, "2026-08-20T00:00:00.000Z")
+    ] as never, {
+      minutes: 60,
+      timeLimitEnabled: false,
+      recommendationMode: "single",
+      sortBy: "newest",
+      resultCount: 3,
+      intent: "learn",
+      source: "mixed",
+      topics: ["science"],
+      formats: ["standard"],
+      languages: ["en"],
+      maxAgeMonths: 12,
+      audioFriendly: false,
+      antiClickbait: true
+    });
+    expect(selected.map((item) => item.candidate.video.id)).toEqual([
+      "new-day-old",
+      "subscribed-week-old",
+      "subscribed-month-old"
+    ]);
   });
 
   it("builds a recency-aware creator affinity without letting repeat watches dominate", () => {

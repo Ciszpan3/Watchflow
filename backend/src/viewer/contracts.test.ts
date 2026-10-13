@@ -15,6 +15,7 @@ describe("viewer API contracts", () => {
       minutes: 45,
       timeLimitEnabled: true,
       recommendationMode: "session",
+      sortBy: "best_match",
       resultCount: 3,
       intent: "learn",
       source: "mixed",
@@ -26,10 +27,12 @@ describe("viewer API contracts", () => {
       antiClickbait: true
     };
     expect(isRecommendationRequest(request)).toBe(true);
+    expect(isRecommendationRequest({ ...request, sortBy: "newest" })).toBe(true);
     expect(isRecommendationRequest({ ...request, minutes: 240 })).toBe(false);
     expect(isRecommendationRequest({ ...request, minutes: 4 })).toBe(false);
     expect(isRecommendationRequest({ ...request, timeLimitEnabled: false })).toBe(true);
     expect(isRecommendationRequest({ ...request, recommendationMode: "feed" })).toBe(false);
+    expect(isRecommendationRequest({ ...request, sortBy: "oldest" })).toBe(false);
     expect(isRecommendationRequest({ ...request, formats: [] })).toBe(false);
     expect(isRecommendationRequest({ ...request, maxAgeMonths: 18 })).toBe(false);
     expect(isRecommendationRequest({ ...request, maxAgeMonths: null })).toBe(true);

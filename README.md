@@ -17,7 +17,7 @@ Przed wygenerowaniem zestawu użytkownik określa:
 - ile ma czasu albo czy długość nie ma znaczenia;
 - czego teraz potrzebuje, na przykład nauki, relaksu, inspiracji lub rozrywki;
 - czy wyniki mają pochodzić z subskrypcji, od nowych twórców czy z obu źródeł;
-- temat, język, format, maksymalny wiek filmu oraz dodatkowe preferencje.
+- temat, język, format oraz czas publikacji, w tym opcję `Newest` obok ścisłych zakresów wieku filmu.
 
 Wybrane ustawienia są zapisywane. Użytkownik nie musi więc konfigurować wszystkiego od początku po każdym odświeżeniu strony.
 
@@ -35,7 +35,7 @@ Surowy plik Google Takeout jest odczytywany w przeglądarce. Do backendu trafiaj
 
 ## Jak powstaje rekomendacja
 
-Po zbudowaniu puli Watchflow stosuje wymagane filtry, a następnie nadaje każdemu filmowi deterministyczny wynik. Ranking uwzględnia między innymi zgodność z wybranym tematem i intencją, historię oglądania, polubienia, relację z kanałem, długość, świeżość, popularność nowych twórców oraz wcześniejszy feedback.
+Po zbudowaniu puli Watchflow stosuje wymagane filtry, a następnie nadaje każdemu filmowi deterministyczny wynik. Ranking uwzględnia między innymi zgodność z wybranym tematem i intencją, historię oglądania, polubienia, relację z kanałem, długość, świeżość, popularność nowych twórców oraz wcześniejszy feedback. W kontroli `Published within` można wybrać ścisły zakres publikacji albo `Newest`. Ta ostatnia opcja pozostawia pozostałe filtry bez zmian, lecz ustawia najnowsze pasujące publikacje na początku; dla nowych twórców również wyszukuje YouTube według daty publikacji.
 
 Filtry języka, formatu i wieku są ścisłe. Jeśli brakuje wystarczającej liczby pasujących filmów, aplikacja pokaże krótszy zestaw zamiast po cichu uzupełnić go starszymi lub niepasującymi materiałami. Na każdej karcie znajduje się krótka informacja **Why this fits**, dzięki której wiadomo, jakie sygnały wpłynęły na wybór.
 

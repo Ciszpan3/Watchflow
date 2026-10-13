@@ -182,14 +182,20 @@ function sourceAllowed(video: Recommendation, source: SourceMode) {
 
 type RankedRecommendation = ScoredRecommendation & { score: number };
 
-function diversify(candidates: RankedRecommendation[], selected: RankedRecommendation[]) {
+function publishedTime(video: Recommendation) {
+  const value = video.publishedAt ? new Date(video.publishedAt).getTime() : 0;
+  return Number.isFinite(value) ? value : 0;
+}
+
+function diversify(candidates: RankedRecommendation[], selected: RankedRecommendation[], sortBy: RecommendationSessionRequest["sortBy"]) {
   return [...candidates].sort((left, right) => {
     const penalty = (video: RankedRecommendation) => selected.reduce((total, picked) => {
       const sameChannel = video.channel === picked.channel ? 18 : 0;
       const sameTopic = overlap(video.topics, picked.topics).length ? 8 : 0;
       return total + sameChannel + sameTopic;
     }, 0);
-    return (right.score - penalty(right)) - (left.score - penalty(left));
+    const newestOrder = sortBy === "newest" ? publishedTime(right) - publishedTime(left) : 0;
+    return newestOrder || (right.score - penalty(right)) - (left.score - penalty(left));
   });
 }
 
@@ -253,7 +259,9 @@ export function createDemoSession(
 
   const ranked = filtered
     .map((video) => enrich(video, request, profile, history, feedback))
-    .sort((left, right) => request.recommendationMode === "single" && request.timeLimitEnabled
+    .sort((left, right) => request.sortBy === "newest"
+      ? publishedTime(right) - publishedTime(left) || right.score - left.score
+      : request.recommendationMode === "single" && request.timeLimitEnabled
       ? Math.abs(left.duration - request.minutes) - Math.abs(right.duration - request.minutes) || right.score - left.score
       : right.score - left.score);
   const pools = {
@@ -268,9 +276,9 @@ export function createDemoSession(
   const selected: RankedRecommendation[] = [];
   let totalMinutes = 0;
   for (const preferredSource of preferredSources) {
-    const desiredPool = diversify(pools[preferredSource], selected);
+    const desiredPool = diversify(pools[preferredSource], selected, request.sortBy);
     const fallbackPool = request.source === "mixed"
-      ? diversify(pools[preferredSource === "subscribed" ? "new" : "subscribed"], selected)
+      ? diversify(pools[preferredSource === "subscribed" ? "new" : "subscribed"], selected, request.sortBy)
       : [];
     const next = [...desiredPool, ...fallbackPool].find((video) =>
       !selected.some((item) => item.id === video.id)
@@ -280,6 +288,10 @@ export function createDemoSession(
     selected.push(next);
     totalMinutes += next.duration;
   }
+
+  const ordered = request.sortBy === "newest"
+    ? selected.sort((left, right) => publishedTime(right) - publishedTime(left))
+    : selected;
 
   return {
     mode: "demo",
@@ -291,9 +303,9 @@ export function createDemoSession(
     page,
     hasMore: ranked.some((video) => !selected.some((item) => item.id === video.id)),
     recommendationMode: request.recommendationMode,
-    seenVideoIds: [...excludedVideoIds, ...selected.map((item) => item.id)],
-    items: selected.map(({ score: _score, ...video }) => video),
-    emptyReason: selected.length ? undefined : "no_filter_matches"
+    seenVideoIds: [...excludedVideoIds, ...ordered.map((item) => item.id)],
+    items: ordered.map(({ score: _score, ...video }) => video),
+    emptyReason: ordered.length ? undefined : "no_filter_matches"
   };
 }
 

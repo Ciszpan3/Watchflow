@@ -94,6 +94,7 @@ function normalizeRequest(request: Partial<RecommendationSessionRequest> | undef
     ...request,
     timeLimitEnabled: request.timeLimitEnabled ?? true,
     recommendationMode: request.recommendationMode ?? "session",
+    sortBy: request.sortBy ?? "best_match",
     resultCount: (request.resultCount ?? (request.recommendationMode === "single" ? 5 : 3)) as ResultCount,
     topics: normalizeSessionTopics(request.topics),
     maxAgeMonths: request.maxAgeMonths === undefined ? 12 : request.maxAgeMonths

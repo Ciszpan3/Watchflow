@@ -4,6 +4,7 @@ export type VideoFormat = "standard" | "short" | "live" | "podcast";
 export type LanguageCode = "en" | "pl";
 export type OnboardingStatus = "not_started" | "in_progress" | "completed" | "skipped";
 export type RecommendationMode = "session" | "single";
+export type RecommendationSort = "best_match" | "newest";
 export type ResultCount = 3 | 5 | 10;
 export type MaxAgeMonths = 1 | 3 | 6 | 12 | 24 | null;
 export type FitTier = "excellent" | "strong" | "good" | "exploratory";
@@ -101,6 +102,7 @@ export type RecommendationSessionRequest = {
   minutes: number;
   timeLimitEnabled: boolean;
   recommendationMode: RecommendationMode;
+  sortBy: RecommendationSort;
   resultCount: ResultCount;
   intent: WatchIntent;
   source: SourceMode;

@@ -16,7 +16,7 @@ type DiscoveryLane = {
   seedChannelTitle: string | null;
   preferredInterestKeys: string[];
   anchorTerms: string[];
-  order: "relevance" | "viewCount";
+  order: "relevance" | "viewCount" | "date";
   durationVariant: 0 | 1;
 };
 
@@ -46,8 +46,8 @@ async function reserveSearchCall() {
   return reserved.count === 1;
 }
 
-const freshnessCacheVersion = "history-first-v22";
-const recommendationAlgorithmVersion = "history-first-v22";
+const freshnessCacheVersion = "history-first-v23";
+const recommendationAlgorithmVersion = "history-first-v23";
 const dayMs = 86_400_000;
 
 export function subscriptionCandidateExpiration(now = new Date()) {
@@ -88,7 +88,7 @@ export function searchCacheKey(query: string, language: string, format: string |
   return createHash("sha256").update(`${freshnessCacheVersion}|${maxAgeMonths ?? "any"}|${query}|${language}|${format ?? "any"}|${categoryId ?? "any"}|${videoDuration ?? "any"}|${order}`).digest("hex");
 }
 
-export function youtubeSearchParameters(query: string, language: string, maxAgeMonths: RecommendationRequest["maxAgeMonths"] = 12, now = new Date(), categoryId?: string, videoDuration?: "short" | "medium" | "long", order: "relevance" | "viewCount" = "relevance") {
+export function youtubeSearchParameters(query: string, language: string, maxAgeMonths: RecommendationRequest["maxAgeMonths"] = 12, now = new Date(), categoryId?: string, videoDuration?: "short" | "medium" | "long", order: "relevance" | "viewCount" | "date" = "relevance") {
   const cutoff = ageCutoff(maxAgeMonths, now);
   return {
     part: ["snippet"] as "snippet"[],
@@ -111,6 +111,10 @@ export function searchDurationForFormats(formats: RecommendationRequest["formats
   if (formats[0] === "podcast") return "long" as const;
   if (formats[0] === "standard") return variant === 0 ? "medium" as const : "long" as const;
   return undefined;
+}
+
+export function recommendationSearchOrder(sortBy: RecommendationRequest["sortBy"], fallback: DiscoveryLane["order"]) {
+  return sortBy === "newest" ? "date" as const : fallback;
 }
 
 export type WatchHistorySignal = { videoId?: string | null; title: string; channelTitle: string | null; topics: string[]; watchedAt?: Date };
@@ -208,7 +212,7 @@ async function searchNewVideos(
     const language = languages[index % languages.length] ?? "en";
     const query = lane.query;
     const videoDuration = searchDurationForFormats(request.formats, lane.durationVariant ?? index);
-    const order = lane.order;
+    const order = recommendationSearchOrder(request.sortBy, lane.order);
     const key = searchCacheKey(query, language, request.formats.length === 1 ? request.formats[0] : undefined, request.maxAgeMonths, categoryId, videoDuration, order);
     const cached = await db.searchCache.findUnique({ where: { cacheKey: key } });
     let ids = cached && cached.expiresAt > new Date() ? cached.videoIds : [];
@@ -372,8 +376,9 @@ function normalizeStoredRequest(value: Prisma.JsonValue): RecommendationRequest 
     ...value,
     timeLimitEnabled: "timeLimitEnabled" in value ? value.timeLimitEnabled : true,
     recommendationMode: legacyMode,
+    sortBy: "sortBy" in value ? value.sortBy : "best_match",
     resultCount: "resultCount" in value ? value.resultCount : legacyMode === "single" ? 5 : 3,
-    maxAgeMonths: 12
+    maxAgeMonths: "maxAgeMonths" in value ? value.maxAgeMonths : 12
   };
   return isRecommendationRequest(legacy) ? legacy : null;
 }
@@ -1107,7 +1112,11 @@ export function selectCandidates(scored: ScoredCandidate[], request: Recommendat
       const singleDistance = (item: ScoredCandidate) => request.recommendationMode === "single" && request.timeLimitEnabled
         ? Math.abs(item.durationMinutes - request.minutes)
         : 0;
-      return (singleDistance(left) - singleDistance(right))
+      const newestOrder = request.sortBy === "newest"
+        ? (right.candidate.video.publishedAt?.getTime() ?? 0) - (left.candidate.video.publishedAt?.getTime() ?? 0)
+        : 0;
+      return newestOrder
+        || (singleDistance(left) - singleDistance(right))
         || ((right.match - penalty(right) - titlePenalty(right)) - (left.match - penalty(left) - titlePenalty(left)));
     });
     const selectedFrequent = selected.filter((item) => item.candidate.source === VideoSource.SUBSCRIBED && item.frequentCreator).length;
@@ -1132,7 +1141,9 @@ export function selectCandidates(scored: ScoredCandidate[], request: Recommendat
     selected.push(next);
     totalMinutes += next.durationMinutes;
   }
-  return selected;
+  return request.sortBy === "newest"
+    ? selected.sort((left, right) => (right.candidate.video.publishedAt?.getTime() ?? 0) - (left.candidate.video.publishedAt?.getTime() ?? 0))
+    : selected;
 }
 
 function sessionResponse(session: {

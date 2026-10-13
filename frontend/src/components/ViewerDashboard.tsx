@@ -79,6 +79,7 @@ import type {
   QueueSort,
   ResultCount,
   RecommendationMode,
+  RecommendationSort,
   RecommendationSessionRequest,
   ScoredRecommendation,
   SourceMode,
@@ -148,6 +149,7 @@ const initialRequest: RecommendationSessionRequest = {
   minutes: 45,
   timeLimitEnabled: true,
   recommendationMode: "session",
+  sortBy: "best_match",
   resultCount: 3,
   intent: "learn",
   source: defaultViewerProfile.defaultSource,
@@ -253,6 +255,7 @@ export function ViewerDashboard() {
   const [minutes, setMinutes] = React.useState(initialRequest.minutes);
   const [timeLimitEnabled, setTimeLimitEnabled] = React.useState(initialRequest.timeLimitEnabled);
   const [recommendationMode, setRecommendationMode] = React.useState<RecommendationMode>(initialRequest.recommendationMode);
+  const [sortBy, setSortBy] = React.useState<RecommendationSort>(initialRequest.sortBy);
   const [resultCount, setResultCount] = React.useState<ResultCount>(initialRequest.resultCount);
   const [intent, setIntent] = React.useState<WatchIntent>(initialRequest.intent);
   const [source, setSource] = React.useState<SourceMode>(initialRequest.source);
@@ -286,6 +289,7 @@ export function ViewerDashboard() {
     setFormats(nextProfile.formats);
     setLanguages(nextProfile.languages);
     setMaxAgeMonths(12);
+    setSortBy("best_match");
     setAudioFriendly(nextProfile.audioFriendly);
     setAntiClickbait(nextProfile.antiClickbait);
     setTopics([]);
@@ -295,6 +299,7 @@ export function ViewerDashboard() {
     setMinutes(request.minutes);
     setTimeLimitEnabled(request.timeLimitEnabled);
     setRecommendationMode(request.recommendationMode);
+    setSortBy(request.sortBy);
     setResultCount(request.resultCount);
     setIntent(request.intent);
     setSource(request.source);
@@ -426,8 +431,8 @@ export function ViewerDashboard() {
   }, [hydrated, mode, queueSort]);
 
   const buildRequest = React.useCallback((sourceOverride?: SourceMode): RecommendationSessionRequest => ({
-    minutes, timeLimitEnabled, recommendationMode, resultCount, intent, source: sourceOverride ?? source, topics, formats, languages, maxAgeMonths, audioFriendly, antiClickbait
-  }), [antiClickbait, audioFriendly, formats, intent, languages, maxAgeMonths, minutes, recommendationMode, resultCount, source, timeLimitEnabled, topics]);
+    minutes, timeLimitEnabled, recommendationMode, sortBy, resultCount, intent, source: sourceOverride ?? source, topics, formats, languages, maxAgeMonths, audioFriendly, antiClickbait
+  }), [antiClickbait, audioFriendly, formats, intent, languages, maxAgeMonths, minutes, recommendationMode, resultCount, sortBy, source, timeLimitEnabled, topics]);
 
   React.useEffect(() => {
     if (!hydrated) return;
@@ -660,6 +665,7 @@ export function ViewerDashboard() {
 
   const activeFilterLabels = [
     recommendationMode === "session" ? "Watch session" : "Single video",
+    sortBy === "newest" ? "Newest" : ageOptions.find((option) => option.value === maxAgeMonths)?.label ?? "Any age",
     `${resultCount} results`,
     timeLimitEnabled ? `${minutes} min` : "No time limit",
     ...topics.map((topic) => interestOptions.find((item) => item.id === topic)?.label ?? topic),
@@ -702,7 +708,7 @@ export function ViewerDashboard() {
             {moreFilters && <div className="advanced-filters">
               <fieldset><legend>Topic for this session</legend><div className="filter-chip-row">{interestOptions.map((option) => <button key={option.id} className={topics.includes(option.id) ? "selected" : ""} type="button" onClick={() => setTopics((current) => current.includes(option.id) ? [] : [option.id])}>{topics.includes(option.id) && <Check />}{option.label}</button>)}</div><small className="filter-help">Choose one session topic. We check video metadata and channel context, not only the title.</small></fieldset>
               <div className="filter-columns"><fieldset><legend>Formats</legend><div className="filter-chip-row compact">{(Object.keys(formatLabels) as VideoFormat[]).map((format) => <button key={format} className={formats.includes(format) ? "selected" : ""} type="button" onClick={() => setFormats((current) => toggleValue(current, format))}>{formatLabels[format]}</button>)}</div></fieldset><fieldset><legend>Languages</legend><div className="filter-chip-row compact">{(Object.keys(languageLabels) as LanguageCode[]).map((language) => <button key={language} className={languages.includes(language) ? "selected" : ""} type="button" onClick={() => setLanguages((current) => toggleValue(current, language))}>{languageLabels[language]}</button>)}</div></fieldset></div>
-              <fieldset><legend>Published within</legend><div className="filter-chip-row compact age-filter">{ageOptions.map((option) => <button key={option.label} className={maxAgeMonths === option.value ? "selected" : ""} type="button" onClick={() => setMaxAgeMonths(option.value)}>{option.label}</button>)}</div><small className="filter-help">This is a strict limit. Watchflow will not fill the set with older videos.</small></fieldset>
+              <fieldset><legend>Published within</legend><div className="filter-chip-row compact age-filter"><button className={sortBy === "newest" ? "selected" : ""} type="button" onClick={() => { setSortBy("newest"); setMaxAgeMonths(null); }}>Newest</button>{ageOptions.map((option) => <button key={option.label} className={sortBy === "best_match" && maxAgeMonths === option.value ? "selected" : ""} type="button" onClick={() => { setSortBy("best_match"); setMaxAgeMonths(option.value); }}>{option.label}</button>)}</div><small className="filter-help">Newest shows the latest matching uploads first. Date ranges are strict limits and never use older videos as filler.</small></fieldset>
               <div className="filter-columns toggles"><label className="toggle-row"><span><Brain /><span><strong>Audio-friendly</strong><small>Works without watching closely</small></span></span><input type="checkbox" checked={audioFriendly} onChange={(event) => setAudioFriendly(event.target.checked)} /><i /></label><label className="toggle-row"><span><CheckCircle2 /><span><strong>Anti-clickbait filter</strong><small>Prefer accurate titles</small></span></span><input type="checkbox" checked={antiClickbait} onChange={(event) => setAntiClickbait(event.target.checked)} /><i /></label></div>
             </div>}
             <button className="button primary build-button" type="button" onClick={() => void generateSession()} disabled={building || !formats.length || !languages.length}>{building ? <LoaderCircle className="spin" /> : <Sparkles />}{building ? "Finding the best matches…" : recommendationMode === "single" ? "Find video alternatives" : "Build my session"}</button>
@@ -710,7 +716,7 @@ export function ViewerDashboard() {
         </section>
 
         <section className="session-section" id="discover">
-          <div className="section-header"><div><span className="section-kicker">Made for this moment · Set {session.page}</span><h2>{session.items.length ? session.recommendationMode === "single" ? `${session.items.length} video alternatives` : `Your ${session.totalMinutes}-minute session` : session.page > 1 ? "No more matches" : session.emptyReason === "no_fresh_matches" ? "No recent matches" : "No exact matches yet"}</h2><p>{session.items.length ? session.items.length < session.request.resultCount ? "These are all current matches available. Older videos were not used as filler." : session.recommendationMode === "single" ? "Choose one. Each card is a standalone option." : `${session.items.length} focused picks, ordered to flow naturally.` : session.emptyReason === "no_fresh_matches" ? "Try broader filters. Watchflow left outdated videos out of this set." : "Change a filter or broaden the source to continue."}</p>{filtersChanged && session.items.length > 0 && <span className="results-outdated"><Clock3 />Filters changed after this set was generated</span>}</div>{session.items.length > 0 && session.naturalEnd && <div className="session-stop"><Check /><span><strong>Natural stopping point</strong>No endless feed after video {session.items.length}</span></div>}</div>
+          <div className="section-header"><div><span className="section-kicker">Made for this moment · Set {session.page}</span><h2>{session.items.length ? session.recommendationMode === "single" ? `${session.items.length} video alternatives` : `Your ${session.totalMinutes}-minute session` : session.page > 1 ? "No more matches" : session.emptyReason === "no_fresh_matches" ? "No recent matches" : "No exact matches yet"}</h2><p>{session.items.length ? session.items.length < session.request.resultCount ? "These are all current matches available. Older videos were not used as filler." : session.request.sortBy === "newest" ? "The latest matching uploads are shown first." : session.recommendationMode === "single" ? "Choose one. Each card is a standalone option." : `${session.items.length} focused picks, ordered to flow naturally.` : session.emptyReason === "no_fresh_matches" ? "Try broader filters. Watchflow left outdated videos out of this set." : "Change a filter or broaden the source to continue."}</p>{filtersChanged && session.items.length > 0 && <span className="results-outdated"><Clock3 />Filters changed after this set was generated</span>}</div>{session.items.length > 0 && session.naturalEnd && <div className="session-stop"><Check /><span><strong>Natural stopping point</strong>No endless feed after video {session.items.length}</span></div>}</div>
           {session.items.length ? <>{session.recommendationMode === "session" && <div className="session-timeline" aria-label={`${session.items.length} video session lasting ${session.totalMinutes} minutes`}>{session.items.map((video, index) => <span key={video.id} style={{ flex: video.duration }}><i>{index + 1}</i>{video.duration} min</span>)}<b>Done</b></div>}<div className={`recommendation-grid ${session.recommendationMode === "single" ? "single-mode" : ""}`}>{session.items.map((video) => <RecommendationCard key={video.id} video={video} live={mode === "live"} saved={saved.has(video.id)} onSave={() => void toggleSaved(video)} onPlay={() => void openVideo(video)} onReject={() => openFeedback(video)} />)}</div><div className="session-actions"><button className="button secondary next-set" type="button" onClick={() => void nextSet()} disabled={building || !session.hasMore}>{building ? <LoaderCircle className="spin" /> : <RefreshCcw />}{building ? "Finding another set…" : session.hasMore ? "Next set" : "No more matches"}</button><small>Previously shown videos will not repeat.</small></div></> : <div className="recommendation-empty"><Search /><strong>{mode === "live" && !signals.lastSyncedAt ? "Sync YouTube before your first live session" : session.page > 1 ? "You reached the end of these matches" : "Nothing fits every choice"}</strong><p>{mode === "live" && !signals.lastSyncedAt ? "Watchflow needs subscriptions and likes before it can rank real videos." : "We will never silently mix in a source you did not choose."}</p><div className="empty-actions">{mode === "live" && !signals.lastSyncedAt ? <button className="button secondary" type="button" onClick={() => void syncNow()} disabled={syncing}><RefreshCcw />Start sync</button> : <button className="button secondary" type="button" onClick={() => document.querySelector("#for-you")?.scrollIntoView({ behavior: "smooth" })}><SlidersHorizontal />Change filters</button>}{source !== "mixed" && <button className="button secondary" type="button" onClick={() => void generateSession("mixed")}><Users />Try Balanced instead</button>}</div></div>}
         </section>
 

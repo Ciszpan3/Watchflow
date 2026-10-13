@@ -4,6 +4,7 @@ export const formats = ["standard", "short", "live", "podcast"] as const;
 export const languages = ["en", "pl"] as const;
 export const intents = ["learn", "relax", "inspire", "company", "solve", "entertain"] as const;
 export const recommendationModes = ["session", "single"] as const;
+export const recommendationSortOptions = ["best_match", "newest"] as const;
 export const maxAgeMonthsOptions = [1, 3, 6, 12, 24] as const;
 export const resultCountOptions = [3, 5, 10] as const;
 
@@ -27,6 +28,7 @@ export type RecommendationRequest = {
   minutes: number;
   timeLimitEnabled: boolean;
   recommendationMode: typeof recommendationModes[number];
+  sortBy: typeof recommendationSortOptions[number];
   resultCount: typeof resultCountOptions[number];
   intent: typeof intents[number];
   source: typeof sources[number];
@@ -83,6 +85,7 @@ export function isRecommendationRequest(value: unknown): value is Recommendation
   return Number.isInteger(request.minutes) && Number(request.minutes) >= 5 && Number(request.minutes) <= 180
     && typeof request.timeLimitEnabled === "boolean"
     && recommendationModes.includes(request.recommendationMode as never)
+    && recommendationSortOptions.includes(request.sortBy as never)
     && resultCountOptions.includes(request.resultCount as never)
     && intents.includes(request.intent as never)
     && sources.includes(request.source as never)

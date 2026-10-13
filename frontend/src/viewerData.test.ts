@@ -7,6 +7,7 @@ const request: RecommendationSessionRequest = {
   minutes: 45,
   timeLimitEnabled: true,
   recommendationMode: "session",
+  sortBy: "best_match",
   resultCount: 3,
   intent: "learn",
   source: "mixed",
@@ -84,6 +85,44 @@ describe("viewer recommendation sessions", () => {
     const unlimited = createDemoSession({ ...request, source: "subscribed", maxAgeMonths: null }, defaultViewerProfile, [old, recent]);
     expect(limited.items.map((video) => video.id)).toEqual(["recent"]);
     expect(unlimited.items.map((video) => video.id)).toContain("old");
+  });
+
+  it("shows the newest matching upload before a higher-scored older one", () => {
+    const older: Recommendation = {
+      ...recommendations[0], id: "older-high-fit", source: "subscribed", likedAffinity: 100,
+      publishedAt: "2026-05-01T00:00:00.000Z"
+    };
+    const newer: Recommendation = {
+      ...recommendations[0], id: "newer-lower-fit", source: "subscribed", likedAffinity: 1,
+      publishedAt: "2026-09-20T00:00:00.000Z"
+    };
+    const result = createDemoSession({
+      ...request, source: "subscribed", sortBy: "newest", timeLimitEnabled: false
+    }, defaultViewerProfile, [older, newer]);
+    expect(result.items.map((video) => video.id)).toEqual(["newer-lower-fit", "older-high-fit"]);
+  });
+
+  it("orders a mixed-source set globally by publication date", () => {
+    const subscribed = {
+      ...recommendations[0], id: "subscribed-week-old", source: "subscribed" as const,
+      channel: "Subscribed channel", publishedAt: "2026-09-13T00:00:00.000Z"
+    };
+    const discovered = {
+      ...recommendations[1], id: "new-day-old", source: "new" as const,
+      channel: "New channel", publishedAt: "2026-09-19T00:00:00.000Z"
+    };
+    const olderSubscribed = {
+      ...recommendations[2], id: "subscribed-month-old", source: "subscribed" as const,
+      channel: "Another subscribed channel", publishedAt: "2026-08-20T00:00:00.000Z"
+    };
+    const result = createDemoSession({
+      ...request, source: "mixed", sortBy: "newest", timeLimitEnabled: false
+    }, defaultViewerProfile, [subscribed, discovered, olderSubscribed]);
+    expect(result.items.map((video) => video.id)).toEqual([
+      "new-day-old",
+      "subscribed-week-old",
+      "subscribed-month-old"
+    ]);
   });
 
   it("does not claim a taste-profile match without a matching signal", () => {
