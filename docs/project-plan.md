@@ -67,6 +67,14 @@ W trybie mieszanym sesja preferuje układ subskrypcja, nowy twórca, subskrypcja
 
 Feedback zawsze ukrywa konkretny odrzucony film do czasu cofnięcia decyzji. `Already watched` i `Not for me` nie wpływają szerzej. `Show less about this topic`, `Too long right now` oraz `Show this channel less` obniżają odpowiednio wybrany temat, długości zbliżone do odrzuconego filmu albo konkretny kanał. Siła tych trzech preferencji maleje liniowo i osiąga zero po 30 dniach. Użytkownik może od razu użyć `Undo`, usunąć pojedynczą decyzję lub wyczyścić cały feedback w `Taste Profile`. Zapisanie lub otwarcie filmu nadal wzmacnia jego temat i kanał.
 
+## Aktywność widza i ścieżki nauki
+
+Obejrzenie jest osobną, jawną decyzją użytkownika. Otwarcie filmu, dodanie go do kolejki ani samo umieszczenie w rekomendacjach nie tworzy rekordu obejrzenia. Akcja `Mark as watched` zapisuje `WatchedVideo`; akcja odwrotna usuwa ten rekord. Wybranie feedbacku `Already watched` również jest świadomym potwierdzeniem i dlatego zapisuje obejrzenie.
+
+Ścieżki nauki są tworzone ręcznie. `LearningPath` przechowuje nazwę i opcjonalny temat, a `LearningPathItem` tylko filmy dodane przez użytkownika z aktualnych rekomendacji lub kolejki. Aplikacja nie tworzy ścieżek z całych wygenerowanych zestawów. Globalny status `WatchedVideo` wyznacza postęp tego samego filmu we wszystkich ścieżkach.
+
+Content Diet obejmuje ruchome okno 7 dni i korzysta wyłącznie z `WatchedVideo`. Pokazuje liczbę obejrzanych filmów, łączny czas, liczbę twórców, rozkład intencji sklasyfikowanych dla filmów, najczęstsze tematy i podział na kanały subskrybowane oraz nowych twórców. Brak ręcznie potwierdzonej aktywności prowadzi do uczciwego pustego stanu, bez danych demonstracyjnych przedstawianych jako własne.
+
 ## Endpointy
 
 - `GET /api/auth/session`, `GET /api/auth/avatar`, `POST /api/auth/logout`, `DELETE /api/auth/youtube`;
@@ -80,6 +88,9 @@ Feedback zawsze ukrywa konkretny odrzucony film do czasu cofnięcia decyzji. `Al
 - `GET /api/viewer/feedback`, `DELETE /api/viewer/feedback`;
 - `GET /api/queue?sort=...`, `POST /api/queue`, `DELETE /api/queue/:videoId`.
 - `GET /api/viewer/history`, `POST /api/viewer/history/import`, `DELETE /api/viewer/history`.
+- `GET /api/activity`, `PUT /api/activity/watched/:videoId`, `DELETE /api/activity/watched/:videoId`;
+- `GET /api/learning-paths`, `POST /api/learning-paths`, `DELETE /api/learning-paths/:pathId`;
+- `POST /api/learning-paths/:pathId/items`, `DELETE /api/learning-paths/:pathId/items/:videoId`.
 
 Kolejkę można sortować według daty zapisania, daty publikacji i długości. Usunięcie pozycji jest trwałe i ograniczone do konta zalogowanego użytkownika.
 
@@ -96,6 +107,6 @@ Kolejkę można sortować według daty zapisania, daty publikacji i długości. 
 
 1. Kolejka zewnętrzna dla synchronizacji i ponowień zamiast procesu aplikacji.
 2. Rozbudowane testy integracyjne YouTube z nagranymi odpowiedziami API.
-3. Live content diet po zebraniu wystarczającej aktywności.
-4. Ścieżki edukacyjne tworzone wyłącznie z prawdziwych rekomendacji.
+3. Edycja kolejności elementów ścieżki oraz przypomnienia o wybranych celach.
+4. Dłuższe zestawienia Content Diet i eksport podsumowania.
 5. Publikacja aplikacji i weryfikacja OAuth przez Google.

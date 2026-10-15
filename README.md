@@ -55,6 +55,12 @@ Film można zapisać do trwałej kolejki, otworzyć na YouTube albo odrzucić z 
 
 Profil smaku przechowuje zainteresowania, języki, preferowane formaty i domyślne źródło. Osobny ekran pozwala zarządzać zaimportowaną historią oraz cofać wcześniejszy feedback. Czasowe kary dotyczące tematu, kanału lub długości stopniowo wygasają, natomiast konkretny film oznaczony jako obejrzany pozostaje ukryty do cofnięcia decyzji.
 
+## Ręczne ścieżki nauki i Content Diet
+
+Użytkownik sam tworzy ścieżkę nauki, nadaje jej nazwę i opcjonalny temat, a następnie ręcznie dodaje wybrane filmy z bieżących rekomendacji lub kolejki. Watchflow nigdy nie buduje ścieżki automatycznie na podstawie samych rekomendacji. Postęp wynika wyłącznie z użycia akcji **Mark as watched** i można go cofnąć.
+
+Content Diet podsumowuje ostatnie 7 dni ręcznie potwierdzonego oglądania: liczbę filmów, minuty, twórców, rodzaje treści, najczęstsze tematy oraz udział kanałów subskrybowanych i nowych. Samo pokazanie rekomendacji, zapisanie filmu lub otwarcie YouTube nie jest traktowane jako obejrzenie. W trybie live dane są przechowywane w PostgreSQL, a w demo w wersjonowanym `localStorage`.
+
 ![Kolejka zapisanych filmów i edytowalny profil smaku](docs/watchflow-queue.png)
 
 ## Bezpieczeństwo i ograniczenia API

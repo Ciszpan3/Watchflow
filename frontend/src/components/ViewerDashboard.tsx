@@ -15,6 +15,9 @@ import {
   LoaderCircle,
   LogOut,
   Menu,
+  Eye,
+  EyeOff,
+  Plus,
   Play,
   RefreshCcw,
   Route,
@@ -53,6 +56,8 @@ import {
   getWatchHistory,
   getViewerProfile,
   getViewerFeedback,
+  getViewerActivity,
+  getLearningPaths,
   getViewerSignals,
   logout,
   migrateLocalProfile,
@@ -69,7 +74,13 @@ import {
   saveViewerProfile,
   importWatchHistory,
   clearWatchHistory,
-  clearViewerFeedback
+  clearViewerFeedback,
+  markVideoWatched,
+  unmarkVideoWatched,
+  createLearningPath,
+  deleteLearningPath,
+  addVideoToLearningPath,
+  removeVideoFromLearningPath
 } from "../viewerApi";
 import type {
   AuthSession,
@@ -82,6 +93,8 @@ import type {
   RecommendationSort,
   RecommendationSessionRequest,
   ScoredRecommendation,
+  LearningPath,
+  ViewerActivitySummary,
   SourceMode,
   VideoFormat,
   ViewerProfile,
@@ -181,6 +194,20 @@ const initialSignals: ViewerSignalsSummary = {
   watchLater: { state: "unavailable", detail: "Not available through the YouTube Data API." }
 };
 
+const emptyActivity: ViewerActivitySummary = {
+  watchedVideoIds: [],
+  diet: {
+    periodDays: 7,
+    periodStart: new Date(0).toISOString(),
+    watchedCount: 0,
+    totalMinutes: 0,
+    uniqueChannels: 0,
+    categories: [],
+    topTopics: [],
+    sources: { subscribed: 0, new: 0 }
+  }
+};
+
 function Sidebar({ open, active, session, mode, connected, signals, queueCount, syncing, onSync, onLogout, onClose, onNavigate }: {
   open: boolean; active: string; session: AuthSession | null; mode: "demo" | "live"; connected: boolean; signals: ViewerSignalsSummary; queueCount: number; syncing: boolean; onSync: () => void; onLogout: () => void; onClose: () => void; onNavigate: (id: string) => void;
 }) {
@@ -203,8 +230,8 @@ function Sidebar({ open, active, session, mode, connected, signals, queueCount, 
   );
 }
 
-function RecommendationCard({ video, saved, live, onSave, onPlay, onReject }: {
-  video: ScoredRecommendation; saved: boolean; live: boolean; onSave: () => void; onPlay: () => void; onReject: () => void;
+function RecommendationCard({ video, saved, watched, live, onSave, onPlay, onReject, onToggleWatched }: {
+  video: ScoredRecommendation; saved: boolean; watched: boolean; live: boolean; onSave: () => void; onPlay: () => void; onReject: () => void; onToggleWatched: () => void;
 }) {
   return (
     <article className="recommendation-card">
@@ -214,7 +241,7 @@ function RecommendationCard({ video, saved, live, onSave, onPlay, onReject }: {
         <h3>{video.title}</h3>
         <div className="signal-row">{video.recommendationSignals.map((signal) => <span key={signal}>{signal}</span>)}</div>
         <div className="why-box"><Lightbulb /><p><strong>Why this fits</strong>{video.reason}</p></div>
-        <div className="card-actions"><button className="button primary" type="button" onClick={onPlay}><Play fill="currentColor" />{live ? "Watch on YouTube" : "Play demo"}</button><button className={`icon-button bordered ${saved ? "saved" : ""}`} type="button" onClick={onSave} aria-label={saved ? "Remove from queue" : "Save to queue"}>{saved ? <Check /> : <Bookmark />}</button><button className="icon-button quiet" type="button" onClick={onReject} aria-label="Not for me"><ThumbsDown /></button></div>
+        <div className="card-actions"><button className="button primary" type="button" onClick={onPlay}><Play fill="currentColor" />{live ? "Watch on YouTube" : "Play demo"}</button><button className={`icon-button bordered watched-toggle ${watched ? "watched" : ""}`} type="button" onClick={onToggleWatched} aria-label={watched ? "Mark as not watched" : "Mark as watched"} title={watched ? "Mark as not watched" : "Mark as watched"}>{watched ? <EyeOff /> : <Eye />}</button><button className={`icon-button bordered ${saved ? "saved" : ""}`} type="button" onClick={onSave} aria-label={saved ? "Remove from queue" : "Save to queue"}>{saved ? <Check /> : <Bookmark />}</button><button className="icon-button quiet" type="button" onClick={onReject} aria-label="Not for me"><ThumbsDown /></button></div>
       </div>
     </article>
   );
@@ -280,6 +307,15 @@ export function ViewerDashboard() {
   const [feedbackItems, setFeedbackItems] = React.useState<ViewerFeedbackItem[]>([]);
   const [feedbackManagerOpen, setFeedbackManagerOpen] = React.useState(false);
   const [feedbackBusyId, setFeedbackBusyId] = React.useState<string | null>(null);
+  const [activity, setActivity] = React.useState<ViewerActivitySummary>(emptyActivity);
+  const [learningPaths, setLearningPaths] = React.useState<LearningPath[]>([]);
+  const [activePathId, setActivePathId] = React.useState("");
+  const [pathFormOpen, setPathFormOpen] = React.useState(false);
+  const [pathTitle, setPathTitle] = React.useState("");
+  const [pathTopic, setPathTopic] = React.useState("");
+  const [pathCandidateId, setPathCandidateId] = React.useState("");
+  const [pathBusy, setPathBusy] = React.useState<string | null>(null);
+  const [watchedBusyId, setWatchedBusyId] = React.useState<string | null>(null);
   const [toast, setToast] = React.useState<Toast | null>(null);
   const feedbackDialogRef = React.useRef<HTMLDivElement>(null);
   const connected = Boolean(authSession?.authenticated && authSession.youtube.connected && mode === "live");
@@ -329,8 +365,8 @@ export function ViewerDashboard() {
         if (cancelled) return;
         setAuthSession(backendSession);
         if (backendSession.authenticated) {
-          const [profileResponse, liveSignals, queue, draft, latest, history, feedback] = await Promise.all([
-            getLiveViewerProfile(), getLiveViewerSignals(), getQueue(), getSessionDraft("live"), getLatestRecommendationSession("live"), getWatchHistory("live"), getViewerFeedback("live")
+          const [profileResponse, liveSignals, queue, draft, latest, history, feedback, liveActivity, paths] = await Promise.all([
+            getLiveViewerProfile(), getLiveViewerSignals(), getQueue(), getSessionDraft("live"), getLatestRecommendationSession("live"), getWatchHistory("live"), getViewerFeedback("live"), getViewerActivity("live"), getLearningPaths("live")
           ]);
           const liveProfile = await migrateLocalProfile(localProfile, profileResponse.profile, profileResponse.source);
           if (cancelled) return;
@@ -341,6 +377,9 @@ export function ViewerDashboard() {
           setLiveQueue(queue.items);
           setHistoryItems(history.items);
           setFeedbackItems(feedback.items);
+          setActivity(liveActivity);
+          setLearningPaths(paths.items);
+          setActivePathId(paths.items[0]?.id ?? "");
           setSaved(new Set(queue.items.map((item) => item.id)));
           if (latest.session) setSession(latest.session);
           else setSession({
@@ -356,10 +395,13 @@ export function ViewerDashboard() {
             if (syncResult.status === "queued" || syncResult.status === "already_running") setSyncing(true);
           }
         } else {
-          const [draft, latest, history, feedback] = await Promise.all([getSessionDraft("demo"), getLatestRecommendationSession("demo"), getWatchHistory("demo"), getViewerFeedback("demo")]);
+          const [draft, latest, history, feedback, demoActivity, paths] = await Promise.all([getSessionDraft("demo"), getLatestRecommendationSession("demo"), getWatchHistory("demo"), getViewerFeedback("demo"), getViewerActivity("demo"), getLearningPaths("demo")]);
           setProfile(localProfile);
           setHistoryItems(history.items);
           setFeedbackItems(feedback.items);
+          setActivity(demoActivity);
+          setLearningPaths(paths.items);
+          setActivePathId(paths.items[0]?.id ?? "");
           if (draft.request) applySessionRequest(draft.request); else applyProfileDefaults(localProfile);
           const demoSignals = await getViewerSignals(false, localProfile);
           setSignals({ ...demoSignals, watchHistory: { ...demoSignals.watchHistory, count: history.count, importedAt: history.importedAt, state: localProfile.useWatchHistory ? history.count ? "ready" : "available" : "disabled" } });
@@ -549,11 +591,14 @@ export function ViewerDashboard() {
 
   function useDemoData() {
     void getViewerProfile().then(async (localProfile) => {
-      const [draft, latest, history, feedback] = await Promise.all([getSessionDraft("demo"), getLatestRecommendationSession("demo"), getWatchHistory("demo"), getViewerFeedback("demo")]);
+      const [draft, latest, history, feedback, demoActivity, paths] = await Promise.all([getSessionDraft("demo"), getLatestRecommendationSession("demo"), getWatchHistory("demo"), getViewerFeedback("demo"), getViewerActivity("demo"), getLearningPaths("demo")]);
       setMode("demo");
       setProfile(localProfile);
       setHistoryItems(history.items);
       setFeedbackItems(feedback.items);
+      setActivity(demoActivity);
+      setLearningPaths(paths.items);
+      setActivePathId(paths.items[0]?.id ?? "");
       if (draft.request) applySessionRequest(draft.request); else applyProfileDefaults(localProfile);
       const demoSignals = await getViewerSignals(false, localProfile);
       setSignals({ ...demoSignals, watchHistory: { ...demoSignals.watchHistory, count: history.count, importedAt: history.importedAt, state: localProfile.useWatchHistory ? history.count ? "ready" : "available" : "disabled" } });
@@ -575,6 +620,95 @@ export function ViewerDashboard() {
       return;
     }
     setToast({ message: `Demo player: “${video.title}” would open on YouTube.`, tone: "info" });
+  }
+
+  async function refreshPersonalActivity() {
+    const [nextActivity, paths] = await Promise.all([getViewerActivity(mode), getLearningPaths(mode)]);
+    setActivity(nextActivity);
+    setLearningPaths(paths.items);
+    setActivePathId((current) => paths.items.some((path) => path.id === current) ? current : paths.items[0]?.id ?? "");
+  }
+
+  async function toggleWatched(video: ScoredRecommendation) {
+    if (watchedBusyId) return;
+    const watched = activity.watchedVideoIds.includes(video.id);
+    setWatchedBusyId(video.id);
+    try {
+      if (watched) await unmarkVideoWatched(video.id, mode);
+      else await markVideoWatched(video, mode);
+      await refreshPersonalActivity();
+      setToast({ message: watched ? "Removed from your watched activity." : "Marked as watched. Your path progress and content diet are updated." });
+    } catch (error) {
+      setAppError(error instanceof Error ? error.message : "Watched activity could not be updated.");
+    } finally {
+      setWatchedBusyId(null);
+    }
+  }
+
+  async function createPath() {
+    if (pathBusy || pathTitle.trim().length < 3) return;
+    setPathBusy("create");
+    try {
+      const result = await createLearningPath(pathTitle, pathTopic, mode);
+      setLearningPaths((current) => [result.path, ...current]);
+      setActivePathId(result.path.id);
+      setPathTitle("");
+      setPathTopic("");
+      setPathFormOpen(false);
+      setToast({ message: "Learning path created. Add only the videos you choose." });
+    } catch (error) {
+      setAppError(error instanceof Error ? error.message : "The learning path could not be created.");
+    } finally {
+      setPathBusy(null);
+    }
+  }
+
+  async function removePath(pathId: string) {
+    if (pathBusy || !window.confirm("Delete this learning path? The videos themselves will stay in your queue and activity.")) return;
+    setPathBusy(pathId);
+    try {
+      await deleteLearningPath(pathId, mode);
+      const next = learningPaths.filter((path) => path.id !== pathId);
+      setLearningPaths(next);
+      setActivePathId(next[0]?.id ?? "");
+      setToast({ message: "Learning path deleted." });
+    } catch (error) {
+      setAppError(error instanceof Error ? error.message : "The learning path could not be deleted.");
+    } finally {
+      setPathBusy(null);
+    }
+  }
+
+  async function addPathVideo(pathId: string, video: ScoredRecommendation) {
+    if (pathBusy) return;
+    setPathBusy(video.id);
+    try {
+      const result = await addVideoToLearningPath(pathId, video, mode);
+      setLearningPaths((current) => current.map((path) => path.id === pathId ? result.path : path));
+      setPathCandidateId("");
+      setToast({ message: "Video added to the path. It is not marked watched until you say so." });
+    } catch (error) {
+      setAppError(error instanceof Error ? error.message : "The video could not be added to this path.");
+    } finally {
+      setPathBusy(null);
+    }
+  }
+
+  async function removePathVideo(pathId: string, videoId: string) {
+    if (pathBusy) return;
+    setPathBusy(videoId);
+    try {
+      await removeVideoFromLearningPath(pathId, videoId, mode);
+      setLearningPaths((current) => current.map((path) => path.id === pathId ? {
+        ...path,
+        items: path.items.filter((item) => item.video.id !== videoId).map((item, position) => ({ ...item, position }))
+      } : path));
+      setToast({ message: "Video removed from the learning path." });
+    } catch (error) {
+      setAppError(error instanceof Error ? error.message : "The video could not be removed from this path.");
+    } finally {
+      setPathBusy(null);
+    }
   }
 
   function openFeedback(video: ScoredRecommendation) {
@@ -605,9 +739,11 @@ export function ViewerDashboard() {
     try {
       const previousIndex = session.items.findIndex((item) => item.id === video.id);
       const result = await sendFeedback(video, reason.id, reason.id === "less_topic" ? feedbackTopic : undefined, mode);
+      if (reason.id === "already_watched" && mode === "demo") await markVideoWatched(video, mode);
       setFeedbackItems((current) => [result.feedback, ...current.filter((item) => item.videoId !== video.id)]);
       setSession((current) => ({ ...current, items: current.items.filter((item) => item.id !== video.id), totalMinutes: Math.max(0, current.totalMinutes - video.duration) }));
       setFeedbackVideo(null);
+      if (reason.id === "already_watched") await refreshPersonalActivity();
       setToast({ message: `Got it: ${reason.label.toLowerCase()}.`, action: { label: "Undo", onClick: () => void undoFeedback(video, Math.max(0, previousIndex)) } });
     } catch (error) {
       setAppError(error instanceof Error ? error.message : "Feedback could not be saved.");
@@ -675,6 +811,9 @@ export function ViewerDashboard() {
     antiClickbait ? "Anti-clickbait" : null
   ].filter(Boolean) as string[];
   const displayedQueue = sortQueueItems(mode === "live" ? liveQueue : demoQueue, queueSort);
+  const activePath = learningPaths.find((path) => path.id === activePathId) ?? learningPaths[0] ?? null;
+  const pathCandidates = [...new Map([...session.items, ...displayedQueue].map((video) => [video.id, video])).values()]
+    .filter((video) => !activePath?.items.some((item) => item.video.id === video.id));
   const filtersChanged = JSON.stringify(session.request) !== JSON.stringify(buildRequest());
 
   if (loadingApp) {
@@ -717,14 +856,30 @@ export function ViewerDashboard() {
 
         <section className="session-section" id="discover">
           <div className="section-header"><div><span className="section-kicker">Made for this moment · Set {session.page}</span><h2>{session.items.length ? session.recommendationMode === "single" ? `${session.items.length} video alternatives` : `Your ${session.totalMinutes}-minute session` : session.page > 1 ? "No more matches" : session.emptyReason === "no_fresh_matches" ? "No recent matches" : "No exact matches yet"}</h2><p>{session.items.length ? session.items.length < session.request.resultCount ? "These are all current matches available. Older videos were not used as filler." : session.request.sortBy === "newest" ? "The latest matching uploads are shown first." : session.recommendationMode === "single" ? "Choose one. Each card is a standalone option." : `${session.items.length} focused picks, ordered to flow naturally.` : session.emptyReason === "no_fresh_matches" ? "Try broader filters. Watchflow left outdated videos out of this set." : "Change a filter or broaden the source to continue."}</p>{filtersChanged && session.items.length > 0 && <span className="results-outdated"><Clock3 />Filters changed after this set was generated</span>}</div>{session.items.length > 0 && session.naturalEnd && <div className="session-stop"><Check /><span><strong>Natural stopping point</strong>No endless feed after video {session.items.length}</span></div>}</div>
-          {session.items.length ? <>{session.recommendationMode === "session" && <div className="session-timeline" aria-label={`${session.items.length} video session lasting ${session.totalMinutes} minutes`}>{session.items.map((video, index) => <span key={video.id} style={{ flex: video.duration }}><i>{index + 1}</i>{video.duration} min</span>)}<b>Done</b></div>}<div className={`recommendation-grid ${session.recommendationMode === "single" ? "single-mode" : ""}`}>{session.items.map((video) => <RecommendationCard key={video.id} video={video} live={mode === "live"} saved={saved.has(video.id)} onSave={() => void toggleSaved(video)} onPlay={() => void openVideo(video)} onReject={() => openFeedback(video)} />)}</div><div className="session-actions"><button className="button secondary next-set" type="button" onClick={() => void nextSet()} disabled={building || !session.hasMore}>{building ? <LoaderCircle className="spin" /> : <RefreshCcw />}{building ? "Finding another set…" : session.hasMore ? "Next set" : "No more matches"}</button><small>Previously shown videos will not repeat.</small></div></> : <div className="recommendation-empty"><Search /><strong>{mode === "live" && !signals.lastSyncedAt ? "Sync YouTube before your first live session" : session.page > 1 ? "You reached the end of these matches" : "Nothing fits every choice"}</strong><p>{mode === "live" && !signals.lastSyncedAt ? "Watchflow needs subscriptions and likes before it can rank real videos." : "We will never silently mix in a source you did not choose."}</p><div className="empty-actions">{mode === "live" && !signals.lastSyncedAt ? <button className="button secondary" type="button" onClick={() => void syncNow()} disabled={syncing}><RefreshCcw />Start sync</button> : <button className="button secondary" type="button" onClick={() => document.querySelector("#for-you")?.scrollIntoView({ behavior: "smooth" })}><SlidersHorizontal />Change filters</button>}{source !== "mixed" && <button className="button secondary" type="button" onClick={() => void generateSession("mixed")}><Users />Try Balanced instead</button>}</div></div>}
+          {session.items.length ? <>{session.recommendationMode === "session" && <div className="session-timeline" aria-label={`${session.items.length} video session lasting ${session.totalMinutes} minutes`}>{session.items.map((video, index) => <span key={video.id} style={{ flex: video.duration }}><i>{index + 1}</i>{video.duration} min</span>)}<b>Done</b></div>}<div className={`recommendation-grid ${session.recommendationMode === "single" ? "single-mode" : ""}`}>{session.items.map((video) => <RecommendationCard key={video.id} video={video} live={mode === "live"} saved={saved.has(video.id)} watched={activity.watchedVideoIds.includes(video.id)} onSave={() => void toggleSaved(video)} onPlay={() => void openVideo(video)} onReject={() => openFeedback(video)} onToggleWatched={() => void toggleWatched(video)} />)}</div><div className="session-actions"><button className="button secondary next-set" type="button" onClick={() => void nextSet()} disabled={building || !session.hasMore}>{building ? <LoaderCircle className="spin" /> : <RefreshCcw />}{building ? "Finding another set…" : session.hasMore ? "Next set" : "No more matches"}</button><small>Previously shown videos will not repeat.</small></div></> : <div className="recommendation-empty"><Search /><strong>{mode === "live" && !signals.lastSyncedAt ? "Sync YouTube before your first live session" : session.page > 1 ? "You reached the end of these matches" : "Nothing fits every choice"}</strong><p>{mode === "live" && !signals.lastSyncedAt ? "Watchflow needs subscriptions and likes before it can rank real videos." : "We will never silently mix in a source you did not choose."}</p><div className="empty-actions">{mode === "live" && !signals.lastSyncedAt ? <button className="button secondary" type="button" onClick={() => void syncNow()} disabled={syncing}><RefreshCcw />Start sync</button> : <button className="button secondary" type="button" onClick={() => document.querySelector("#for-you")?.scrollIntoView({ behavior: "smooth" })}><SlidersHorizontal />Change filters</button>}{source !== "mixed" && <button className="button secondary" type="button" onClick={() => void generateSession("mixed")}><Users />Try Balanced instead</button>}</div></div>}
         </section>
 
-        <div className="utility-grid"><section className="utility-panel queue-panel" id="queue"><div className="section-header compact-header queue-header"><div><span className="section-kicker">Saved-video rescue</span><h2>Worth another look</h2><p>{mode === "live" ? "Your saved recommendations stay here between visits." : "Demo examples of videos that have been waiting too long."}</p></div><div className="queue-tools"><label><span>Sort saved videos</span><select value={queueSort} onChange={(event) => setQueueSort(event.target.value as QueueSort)}>{queueSortOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><ChevronDown /></label>{displayedQueue.length > 0 && <button className="button secondary" type="button" onClick={() => void openVideo(displayedQueue[Math.floor(Math.random() * displayedQueue.length)])}><Sparkles />Pick one</button>}</div></div>{displayedQueue.length ? <div className="queue-list">{displayedQueue.map((video) => <article key={video.id}><SafeImage src={video.image} alt="" /><div><span>Saved {new Date(video.savedAt).toLocaleDateString()}</span><h3>{video.title}</h3><p>{video.channel} · {video.duration} min · {video.published}</p></div><div className="queue-actions"><button className="icon-button" type="button" onClick={() => void openVideo(video)} aria-label={`Open ${video.title}`}><ChevronRight /></button><button className="icon-button remove-queue" type="button" onClick={() => void toggleSaved(video)} disabled={removingVideoId === video.id} aria-label={`Remove ${video.title} from queue`}>{removingVideoId === video.id ? <LoaderCircle className="spin" /> : <Trash2 />}</button></div></article>)}</div> : <div className="compact-empty"><Bookmark /><strong>Your queue is empty</strong><p>Save a recommendation and it will remain available here.</p></div>}</section>
-          <section className="utility-panel path-panel" id="paths">{mode === "live" ? <div className="feature-unavailable"><Route /><span className="section-kicker">Learning paths</span><h2>Coming after your first sessions</h2><p>Live learning paths are not generated yet. Watchflow will never present demo progress as yours.</p></div> : <><div className="section-header compact-header"><div><span className="section-kicker">Continue learning</span><h2>Understanding the night sky</h2><p>1 of 4 demo steps completed</p></div><span className="path-progress">25%</span></div><div className="path-steps"><div className="complete"><span><Check /></span><div><strong>How to read the night sky</strong><small>Completed · 12 min</small></div></div><div className="current"><span>2</span><div><strong>Why Saturn has rings</strong><small>Up next · 18 min</small></div><Play /></div><div><span>3</span><div><strong>Finding planets from home</strong><small>15 min</small></div></div><div><span>4</span><div><strong>Your first telescope</strong><small>21 min</small></div></div></div></>}</section></div>
+        <div className="utility-grid"><section className="utility-panel queue-panel" id="queue"><div className="section-header compact-header queue-header"><div><span className="section-kicker">Saved-video rescue</span><h2>Worth another look</h2><p>{mode === "live" ? "Your saved recommendations stay here between visits." : "Demo examples of videos that have been waiting too long."}</p></div><div className="queue-tools"><label><span>Sort saved videos</span><select value={queueSort} onChange={(event) => setQueueSort(event.target.value as QueueSort)}>{queueSortOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><ChevronDown /></label>{displayedQueue.length > 0 && <button className="button secondary" type="button" onClick={() => void openVideo(displayedQueue[Math.floor(Math.random() * displayedQueue.length)])}><Sparkles />Pick one</button>}</div></div>{displayedQueue.length ? <div className="queue-list">{displayedQueue.map((video) => <article key={video.id}><SafeImage src={video.image} alt="" /><div><span>Saved {new Date(video.savedAt).toLocaleDateString()}</span><h3>{video.title}</h3><p>{video.channel} · {video.duration} min · {video.published}</p></div><div className="queue-actions"><button className={`icon-button watched-toggle ${activity.watchedVideoIds.includes(video.id) ? "watched" : ""}`} type="button" onClick={() => void toggleWatched(video)} disabled={watchedBusyId === video.id} aria-label={activity.watchedVideoIds.includes(video.id) ? `Mark ${video.title} as not watched` : `Mark ${video.title} as watched`}>{watchedBusyId === video.id ? <LoaderCircle className="spin" /> : activity.watchedVideoIds.includes(video.id) ? <EyeOff /> : <Eye />}</button><button className="icon-button" type="button" onClick={() => void openVideo(video)} aria-label={`Open ${video.title}`}><ChevronRight /></button><button className="icon-button remove-queue" type="button" onClick={() => void toggleSaved(video)} disabled={removingVideoId === video.id} aria-label={`Remove ${video.title} from queue`}>{removingVideoId === video.id ? <LoaderCircle className="spin" /> : <Trash2 />}</button></div></article>)}</div> : <div className="compact-empty"><Bookmark /><strong>Your queue is empty</strong><p>Save a recommendation and it will remain available here.</p></div>}</section>
+          <section className="utility-panel path-panel" id="paths">
+            <div className="section-header compact-header path-heading">
+              <div><span className="section-kicker">Learning paths</span><h2>Learn on your terms</h2><p>Paths contain only videos you add yourself. Recommendations are never enrolled automatically.</p></div>
+              <button className="button secondary" type="button" onClick={() => setPathFormOpen((open) => !open)}><Plus />New path</button>
+            </div>
+            {pathFormOpen && <div className="path-create-form">
+              <label><span>Path name</span><input value={pathTitle} maxLength={80} placeholder="e.g. Understand personal finance" onChange={(event) => setPathTitle(event.target.value)} /></label>
+              <label><span>Topic (optional)</span><select value={pathTopic} onChange={(event) => setPathTopic(event.target.value)}><option value="">No topic</option>{interestOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select><ChevronDown /></label>
+              <div><button className="button primary" type="button" onClick={() => void createPath()} disabled={pathTitle.trim().length < 3 || pathBusy === "create"}>{pathBusy === "create" ? <LoaderCircle className="spin" /> : <Plus />}Create path</button><button className="button text-button" type="button" onClick={() => setPathFormOpen(false)}>Cancel</button></div>
+            </div>}
+            {!activePath ? <div className="compact-empty path-empty"><Route /><strong>No learning paths yet</strong><p>Create one when you have a real goal, then add only the videos you actually want to follow.</p></div> : <>
+              <div className="path-toolbar"><label><span>Current path</span><select value={activePath.id} onChange={(event) => setActivePathId(event.target.value)}>{learningPaths.map((path) => <option key={path.id} value={path.id}>{path.title}</option>)}</select><ChevronDown /></label><button className="icon-button remove-queue" type="button" onClick={() => void removePath(activePath.id)} disabled={pathBusy === activePath.id} aria-label={`Delete ${activePath.title}`}>{pathBusy === activePath.id ? <LoaderCircle className="spin" /> : <Trash2 />}</button></div>
+              <div className="path-summary"><div><strong>{activePath.title}</strong><span>{activePath.topic ? interestOptions.find((option) => option.id === activePath.topic)?.label ?? activePath.topic : "Self-directed path"}</span></div><span className="path-progress">{activePath.items.length ? Math.round((activePath.items.filter((item) => item.watched).length / activePath.items.length) * 100) : 0}%</span></div>
+              <div className="path-add-row"><label><span>Add from current recommendations or queue</span><select value={pathCandidateId} onChange={(event) => setPathCandidateId(event.target.value)}><option value="">Choose a video</option>{pathCandidates.map((video) => <option key={video.id} value={video.id}>{video.title} · {video.channel}</option>)}</select><ChevronDown /></label><button className="button secondary" type="button" disabled={!pathCandidateId || Boolean(pathBusy)} onClick={() => { const video = pathCandidates.find((item) => item.id === pathCandidateId); if (video) void addPathVideo(activePath.id, video); }}>{pathBusy === pathCandidateId ? <LoaderCircle className="spin" /> : <Plus />}Add</button></div>
+              {activePath.items.length ? <div className="path-steps">{activePath.items.map((item, index) => <div key={item.id} className={item.watched ? "complete" : ""}><button className={`path-status ${item.watched ? "complete" : ""}`} type="button" onClick={() => void toggleWatched(item.video)} disabled={watchedBusyId === item.video.id} aria-label={item.watched ? `Mark ${item.video.title} as not watched` : `Mark ${item.video.title} as watched`}>{watchedBusyId === item.video.id ? <LoaderCircle className="spin" /> : item.watched ? <Check /> : index + 1}</button><div><strong>{item.video.title}</strong><small>{item.watched ? "Watched" : "Not watched yet"} · {item.video.duration} min · {item.video.channel}</small></div><div className="path-step-actions"><button className="icon-button" type="button" onClick={() => void openVideo(item.video)} aria-label={`Open ${item.video.title}`}><Play /></button><button className="icon-button remove-queue" type="button" onClick={() => void removePathVideo(activePath.id, item.video.id)} disabled={pathBusy === item.video.id} aria-label={`Remove ${item.video.title} from path`}>{pathBusy === item.video.id ? <LoaderCircle className="spin" /> : <X />}</button></div></div>)}</div> : <div className="compact-empty path-items-empty"><Plus /><strong>This path is empty</strong><p>Add a current recommendation or saved video. Nothing is added just because Watchflow suggested it.</p></div>}
+            </>}
+          </section></div>
 
         <div className="utility-grid bottom-grid" id="taste"><section className="utility-panel taste-panel profile-summary"><div className="section-header compact-header"><div><span className="section-kicker">Editable taste profile</span><h2>What Watchflow understands</h2><p>{profile.status === "completed" ? `Your ${mode === "live" ? "saved" : "local"} defaults guide every new session.` : "Balanced defaults are active until setup is complete."}</p></div><Brain /></div><div className="profile-summary-grid"><div><span>Interests</span><p>{profile.interests.map((interest) => interestOptions.find((item) => item.id === interest)?.label ?? interest).join(", ") || "Not set"}</p></div><div><span>Languages</span><p>{profile.languages.map((language) => languageLabels[language]).join(", ")}</p></div><div><span>Default source</span><p>{sourceOptions.find((option) => option.value === profile.defaultSource)?.label}</p></div><div><span>YouTube signals</span><p>{profile.useSubscriptions && profile.useLikedVideos ? "Subscriptions + likes" : profile.useSubscriptions ? "Subscriptions" : profile.useLikedVideos ? "Liked videos" : "Explicit profile only"}</p></div></div><div className="profile-actions"><button className="button secondary" type="button" onClick={() => { setEditingProfile(true); setOnboardingOpen(true); }}><SlidersHorizontal />Edit taste profile</button><button className="button secondary" type="button" onClick={() => setHistoryOpen(true)}><History />Manage watch history</button><button className="button secondary" type="button" onClick={() => setFeedbackManagerOpen(true)}><ThumbsDown />Manage feedback ({feedbackItems.length})</button></div>{mode === "live" && <div className="account-actions"><button type="button" onClick={() => { if (window.confirm("Disconnect YouTube and remove imported YouTube data? Your taste profile will remain.")) void disconnectYoutube().then(() => window.location.reload()); }}>Disconnect YouTube</button><button className="danger" type="button" onClick={() => { if (window.confirm("Permanently delete your Watchflow account and all stored data?")) void deleteViewerAccount().then(() => window.location.reload()); }}>Delete account</button></div>}</section>
-          <section className="utility-panel diet-panel">{mode === "live" ? <div className="feature-unavailable"><BarChart3 /><span className="section-kicker">Content diet</span><h2>Not enough activity yet</h2><p>This view will activate when Watchflow has enough real opens and feedback to summarize your choices.</p></div> : <><div className="section-header compact-header"><div><span className="section-kicker">This week's content diet</span><h2>Balanced, with room to explore</h2><p>Demo visualization based on example activity.</p></div></div><div className="diet-bars"><div><span><b>Learning</b><small>42%</small></span><i><b style={{ width: "42%" }} /></i></div><div><span><b>Relaxation</b><small>28%</small></span><i><b style={{ width: "28%" }} /></i></div><div><span><b>Practical</b><small>19%</small></span><i><b style={{ width: "19%" }} /></i></div><div><span><b>New perspectives</b><small>11%</small></span><i><b style={{ width: "11%" }} /></i></div></div><p className="diet-note"><Lightbulb />This is demo data. Live activity tracking is not implemented.</p></>}</section></div>
+          <section className="utility-panel diet-panel"><div className="section-header compact-header"><div><span className="section-kicker">Last {activity.diet.periodDays} days</span><h2>Your content diet</h2><p>Based only on videos you explicitly marked as watched.</p></div><BarChart3 /></div>{activity.diet.watchedCount ? <><div className="diet-stats"><div><strong>{activity.diet.watchedCount}</strong><span>videos watched</span></div><div><strong>{activity.diet.totalMinutes}</strong><span>minutes</span></div><div><strong>{activity.diet.uniqueChannels}</strong><span>creators</span></div></div><div className="diet-bars">{activity.diet.categories.map((category) => <div key={category.key}><span><b>{category.label}</b><small>{category.percentage}%</small></span><i><b style={{ width: `${category.percentage}%` }} /></i></div>)}</div>{activity.diet.topTopics.length > 0 && <div className="diet-topics"><span>Top topics</span><div>{activity.diet.topTopics.map((topic) => <small key={topic.topic}>{interestOptions.find((option) => option.id === topic.topic)?.label ?? topic.topic} · {topic.count}</small>)}</div></div>}<div className="diet-sources"><span>Subscribed channels <strong>{activity.diet.sources.subscribed}</strong></span><span>New creators <strong>{activity.diet.sources.new}</strong></span></div><p className="diet-note"><Lightbulb />Opening, saving or receiving a recommendation does not count. You stay in control.</p></> : <div className="compact-empty diet-empty"><Eye /><strong>Nothing marked watched yet</strong><p>Use “Mark as watched” on a recommendation, saved video or learning-path step to build this view.</p></div>}</section></div>
         <section className="creator-note" id="creator-tools"><BarChart3 /><div><strong>Creator analytics stays optional</strong><p>Channel performance tools can live here later, without distracting from the viewer-first experience.</p></div><span>Future add-on</span></section>
       </main>
 

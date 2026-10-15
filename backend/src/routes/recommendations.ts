@@ -70,6 +70,13 @@ recommendationsRouter.post("/:videoId/feedback", async (req, res, next) => {
       create: { userId, videoId, reason, targetTopics },
       include: { video: { include: { channel: true } } }
     });
+    if (reason === "ALREADY_WATCHED") {
+      await db.watchedVideo.upsert({
+        where: { userId_videoId: { userId, videoId } },
+        update: { watchedAt: new Date() },
+        create: { userId, videoId }
+      });
+    }
     res.status(201).json({ feedback: serializeFeedback(feedback) });
   } catch (error) {
     next(error);

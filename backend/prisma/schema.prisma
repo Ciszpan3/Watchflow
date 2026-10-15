@@ -62,6 +62,8 @@ model User {
   savedVideos            SavedVideo[]
   feedback               RecommendationFeedback[]
   activities             ViewingActivity[]
+  watchedVideos          WatchedVideo[]
+  learningPaths          LearningPath[]
   watchHistory           WatchHistoryItem[]
 }
 
@@ -161,6 +163,8 @@ model Video {
   savedBy              SavedVideo[]
   feedback             RecommendationFeedback[]
   activities           ViewingActivity[]
+  watchedBy            WatchedVideo[]
+  learningPathItems    LearningPathItem[]
 
   @@index([channelId, publishedAt])
 }
@@ -292,6 +296,44 @@ model ViewingActivity {
 
   @@index([userId, createdAt])
   @@index([userId, videoId])
+}
+
+model WatchedVideo {
+  id        String   @id @default(cuid())
+  userId    String
+  videoId   String
+  watchedAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  video     Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, videoId])
+  @@index([userId, watchedAt])
+}
+
+model LearningPath {
+  id        String             @id @default(cuid())
+  userId    String
+  title     String
+  topic     String?
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items     LearningPathItem[]
+
+  @@index([userId, updatedAt])
+}
+
+model LearningPathItem {
+  id        String       @id @default(cuid())
+  pathId    String
+  videoId   String
+  position  Int
+  createdAt DateTime     @default(now())
+  path      LearningPath @relation(fields: [pathId], references: [id], onDelete: Cascade)
+  video     Video        @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([pathId, videoId])
+  @@index([pathId, position])
 }
 
 model WatchHistoryItem {

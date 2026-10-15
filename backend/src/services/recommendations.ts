@@ -1471,12 +1471,13 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
     ...(currentNewVideoIds.size ? [{ source: VideoSource.NEW, videoId: { in: [...currentNewVideoIds] } } as Prisma.UserVideoCandidateWhereInput] : [])
   ];
 
-  const [candidateRows, likedRows, feedbackRows, activityRows, savedRows] = await Promise.all([
+  const [candidateRows, likedRows, feedbackRows, activityRows, savedRows, watchedRows] = await Promise.all([
     db.userVideoCandidate.findMany({ where: { userId, expiresAt: { gt: new Date() }, OR: candidateSourceFilters }, include: { video: { include: { channel: true } } } }),
     db.likedVideo.findMany({ where: { userId }, include: { video: { include: { channel: true } } } }),
     db.recommendationFeedback.findMany({ where: { userId }, include: { video: true } }),
     db.viewingActivity.findMany({ where: { userId, createdAt: { gt: new Date(Date.now() - 90 * 86_400_000) } }, include: { video: true } }),
-    db.savedVideo.findMany({ where: { userId }, include: { video: true } })
+    db.savedVideo.findMany({ where: { userId }, include: { video: true } }),
+    db.watchedVideo.findMany({ where: { userId }, select: { videoId: true } })
   ]);
   const requestedTopics = request.topics.length ? request.topics : [...profile.interests, ...profile.customTopics];
   const enrichedHistoryRows = enrichWatchHistorySignals(historyRows, [
@@ -1518,6 +1519,7 @@ export async function buildLiveSession(userId: string, request: RecommendationRe
   const savedTopics = savedRows.flatMap((row) => row.video.topics);
   const excludedVideoIds = new Set([
     ...feedbackRows.map((row) => row.videoId),
+    ...watchedRows.map((row) => row.videoId),
     ...(profile.useWatchHistory ? historyRows.flatMap((row) => row.videoId ? [row.videoId] : []) : []),
     ...(options.excludedVideoIds ?? [])
   ]);

@@ -3,8 +3,10 @@ import cors from "cors";
 import express from "express";
 import { env } from "./config/env.js";
 import { authRouter } from "./routes/auth.js";
+import { activityRouter } from "./routes/activity.js";
 import { channelRouter } from "./routes/channel.js";
 import { insightsRouter } from "./routes/insights.js";
+import { learningPathsRouter } from "./routes/learningPaths.js";
 import { queueRouter } from "./routes/queue.js";
 import { recommendationsRouter } from "./routes/recommendations.js";
 import { syncRouter } from "./routes/sync.js";
@@ -30,6 +32,8 @@ app.get("/health", (_req, res) => {
 
 app.use("/api/auth", authRouter);
 app.use("/api/viewer", viewerRouter);
+app.use("/api/activity", activityRouter);
+app.use("/api/learning-paths", learningPathsRouter);
 app.use("/api/recommendations", recommendationsRouter);
 app.use("/api/queue", queueRouter);
 

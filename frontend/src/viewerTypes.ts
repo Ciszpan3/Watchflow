@@ -155,3 +155,44 @@ export type ViewerFeedbackItem = {
   preferenceExpiresAt: string | null;
   video: { title: string; channel: string; image: string; duration: number };
 };
+
+export type ContentDietCategory = {
+  key: string;
+  label: string;
+  count: number;
+  percentage: number;
+};
+
+export type ContentDietSummary = {
+  periodDays: number;
+  periodStart: string;
+  watchedCount: number;
+  totalMinutes: number;
+  uniqueChannels: number;
+  categories: ContentDietCategory[];
+  topTopics: Array<{ topic: string; count: number }>;
+  sources: { subscribed: number; new: number };
+};
+
+export type ViewerActivitySummary = {
+  watchedVideoIds: string[];
+  diet: ContentDietSummary;
+};
+
+export type LearningPathItem = {
+  id: string;
+  position: number;
+  addedAt: string;
+  watched: boolean;
+  watchedAt: string | null;
+  video: ScoredRecommendation;
+};
+
+export type LearningPath = {
+  id: string;
+  title: string;
+  topic: string | null;
+  createdAt: string;
+  updatedAt: string;
+  items: LearningPathItem[];
+};
